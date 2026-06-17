@@ -1,0 +1,6 @@
+node_modules/
+
+# Teams pairing token. This is a per-machine credential. Never commit it.
+token.json
+
+*.log
