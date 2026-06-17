@@ -28,13 +28,19 @@ internal sealed class MuteMeDevice : IDisposable
     private const int Vid = 0x20A0;
     private const int Pid = 0x42DA;
 
+    // Byte 4 of the input report is the touch code: 0x01 is a touch-present sample
+    // repeated while the pad is held, and 0x02 is the single click marker the
+    // firmware emits once when the pad is released. Toggling on the click marker
+    // gives exactly one toggle per press regardless of how the 0x01 samples jitter.
+    private const byte ClickCode = 0x02;
+
     private readonly object gate = new();
     private HidDevice? device;
     private HidStream? stream;
     private Thread? readThread;
     private volatile bool running;
-    private byte lastCommand = 0xFF; // sentinel forces the first write through
-    private bool touchDown;
+    private byte lastWritten = 0xFF; // sentinel forces the first write through
+    private byte desiredCommand = Off; // intended LED state, re-sent as a keepalive
 
     /// <summary>Raised on the read thread when the pad is tapped and released.</summary>
     public event Action? Tapped;
@@ -78,8 +84,7 @@ internal sealed class MuteMeDevice : IDisposable
             opened.ReadTimeout = 500;
             this.device = dev;
             this.stream = opened;
-            this.lastCommand = 0xFF;
-            this.touchDown = false;
+            this.lastWritten = 0xFF;
             this.running = true;
             this.readThread = new Thread(this.ReadLoop)
             {
@@ -87,6 +92,10 @@ internal sealed class MuteMeDevice : IDisposable
                 Name = "muteme-read",
             };
             this.readThread.Start();
+
+            // The device does not stream touch input until it has received an output
+            // report, so send the current LED state immediately to start reporting.
+            this.WriteLocked(this.desiredCommand);
             return true;
         }
     }
@@ -99,24 +108,48 @@ internal sealed class MuteMeDevice : IDisposable
     {
         lock (this.gate)
         {
-            if (this.stream is null || command == this.lastCommand)
+            this.desiredCommand = command;
+            if (this.stream is null || command == this.lastWritten)
             {
                 return;
             }
 
-            try
+            this.WriteLocked(command);
+        }
+    }
+
+    /// <summary>
+    /// Re-sends the current LED command. The device only streams touch input while
+    /// it keeps receiving output reports, so the poll loop calls this periodically
+    /// to keep tap detection alive even when the LED color is not changing.
+    /// </summary>
+    public void Refresh()
+    {
+        lock (this.gate)
+        {
+            if (this.stream is null)
             {
-                this.WriteReport(command);
-                this.lastCommand = command;
+                return;
             }
-            catch (IOException)
-            {
-                this.DropLocked();
-            }
-            catch (ObjectDisposedException)
-            {
-                this.DropLocked();
-            }
+
+            this.WriteLocked(this.desiredCommand);
+        }
+    }
+
+    private void WriteLocked(byte command)
+    {
+        try
+        {
+            this.WriteReport(command);
+            this.lastWritten = command;
+        }
+        catch (IOException)
+        {
+            this.DropLocked();
+        }
+        catch (ObjectDisposedException)
+        {
+            this.DropLocked();
         }
     }
 
@@ -203,14 +236,21 @@ internal sealed class MuteMeDevice : IDisposable
                 continue;
             }
 
-            bool touch = buffer[read - 1] != 0x00;
-            if (touch && !this.touchDown)
+            // Byte 4 carries the touch code, but bytes 0..3 are always zero, so scan
+            // for the first non-zero byte. 0x01 repeats while the pad is held; 0x02
+            // is the single click marker on release. Fire one tap per click marker.
+            byte code = 0;
+            for (int i = 0; i < read; i++)
             {
-                this.touchDown = true;
+                if (buffer[i] != 0)
+                {
+                    code = buffer[i];
+                    break;
+                }
             }
-            else if (!touch && this.touchDown)
+
+            if (code == ClickCode)
             {
-                this.touchDown = false;
                 this.Tapped?.Invoke();
             }
         }
@@ -242,7 +282,6 @@ internal sealed class MuteMeDevice : IDisposable
 
         this.stream = null;
         this.device = null;
-        this.lastCommand = 0xFF;
-        this.touchDown = false;
+        this.lastWritten = 0xFF;
     }
 }

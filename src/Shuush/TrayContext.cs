@@ -38,7 +38,10 @@ internal sealed class TrayContext : ApplicationContext
     private int forceApply;
     private bool disposed;
 
-    private const long SafetyScanIntervalMs = 15_000;
+    // The registry gate is the primary in-call trigger; this occasional full scan
+    // is only a backstop for a call where Teams holds no microphone, so keep it
+    // infrequent to hold idle CPU down.
+    private const long SafetyScanIntervalMs = 60_000;
 
     public TrayContext()
     {
@@ -121,6 +124,11 @@ internal sealed class TrayContext : ApplicationContext
                     wasConnected = connected;
                 }
 
+                // Keepalive: the MuteMe stops streaming touch input when it stops
+                // receiving output reports, so re-send the LED state every loop so a
+                // physical tap is still detected during a call whose color is static.
+                this.muteMe.Refresh();
+
                 if (this.paused)
                 {
                     this.muteMe.Set(MuteMeDevice.Off);
@@ -135,20 +143,36 @@ internal sealed class TrayContext : ApplicationContext
                     continue;
                 }
 
-                if (Interlocked.Exchange(ref this.toggleRequested, 0) == 1 && monitor.Toggle())
+                if (Interlocked.Exchange(ref this.toggleRequested, 0) == 1)
                 {
                     MuteState before = haveLast ? last : SafePoll(monitor);
-
-                    // Confirm the flip by polling the button Name rather than waiting
-                    // a fixed delay, so the LED reacts as soon as Teams updates.
-                    for (int i = 0; i < 15 && this.running; i++)
+                    if (before != MuteState.NoCall && monitor.Toggle())
                     {
-                        if (SafePoll(monitor) != before)
-                        {
-                            break;
-                        }
+                        // Instant feedback: drive the LED and tray to the predicted
+                        // flipped state right away so a tap does not wait for a UIA
+                        // round-trip. The confirm poll below corrects it on the rare
+                        // chance Teams did not actually flip.
+                        MuteState predicted = before == MuteState.Muted ? MuteState.Live : MuteState.Muted;
+                        this.ApplyState(predicted);
+                        last = predicted;
+                        haveLast = true;
 
-                        this.pollWake.WaitOne(40);
+                        for (int i = 0; i < 25 && this.running; i++)
+                        {
+                            MuteState current = SafePoll(monitor);
+                            if (current != MuteState.NoCall && current != before)
+                            {
+                                if (current != predicted)
+                                {
+                                    this.ApplyState(current);
+                                    last = current;
+                                }
+
+                                break;
+                            }
+
+                            this.pollWake.WaitOne(40);
+                        }
                     }
                 }
 
