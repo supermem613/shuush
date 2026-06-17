@@ -1,0 +1,370 @@
+using System.Drawing;
+
+namespace Shuush;
+
+/// <summary>
+/// The tray application. Owns the MuteMe device, a background poll thread that
+/// reads Teams state through UI Automation, the colored tray icon, and the
+/// context-menu flyout.
+///
+/// Threading: a single background thread owns the <see cref="TeamsMonitor"/> and
+/// performs every UIA call, because the UIA client and its elements are used on
+/// one thread only. The poll thread drives the LED directly (HID writes are
+/// thread-safe) and marshals tray-icon updates back to the UI thread through the
+/// captured <see cref="SynchronizationContext"/>.
+/// </summary>
+internal sealed class TrayContext : ApplicationContext
+{
+    private readonly NotifyIcon notifyIcon = new();
+    private readonly ContextMenuStrip menu = new();
+    private readonly MuteMeDevice muteMe = new();
+    private readonly System.Windows.Forms.Timer bootstrap = new() { Interval = 1 };
+    private readonly AutoResetEvent pollWake = new(false);
+
+    private readonly ToolStripMenuItem statusItem = new("Teams: starting...") { Enabled = false };
+    private readonly ToolStripMenuItem deviceItem = new("MuteMe: ...") { Enabled = false };
+    private readonly ToolStripMenuItem toggleItem = new("Toggle mute");
+    private readonly ToolStripMenuItem pauseItem = new("Pause") { CheckOnClick = false };
+    private readonly ToolStripMenuItem startupItem = new("Start with Windows") { CheckOnClick = false };
+    private readonly ToolStripMenuItem settingsItem = new("Settings...");
+    private readonly ToolStripMenuItem exitItem = new("Exit");
+
+    private volatile AppConfig config;
+    private SynchronizationContext uiContext = null!;
+    private Thread? pollThread;
+    private volatile bool running;
+    private volatile bool paused;
+    private int toggleRequested;
+    private int forceApply;
+    private bool disposed;
+
+    private const long SafetyScanIntervalMs = 15_000;
+
+    public TrayContext()
+    {
+        this.config = AppConfig.Load();
+
+        this.BuildMenu();
+
+        this.notifyIcon.Text = "shuush";
+        this.notifyIcon.Icon = TrayIconRenderer.Create(Color.DimGray, false);
+        this.notifyIcon.ContextMenuStrip = this.menu;
+        this.notifyIcon.Visible = true;
+        this.notifyIcon.DoubleClick += this.OnSettingsClick;
+
+        this.muteMe.Tapped += this.OnDeviceTapped;
+
+        // The WindowsForms SynchronizationContext is only installed once the
+        // message loop is running, so capture it and start polling on the first
+        // bootstrap tick rather than in the constructor.
+        this.bootstrap.Tick += this.OnBootstrapTick;
+        this.bootstrap.Start();
+    }
+
+    private void BuildMenu()
+    {
+        this.toggleItem.Click += this.OnToggleClick;
+        this.pauseItem.Click += this.OnPauseClick;
+        this.startupItem.Click += this.OnStartupClick;
+        this.settingsItem.Click += this.OnSettingsClick;
+        this.exitItem.Click += this.OnExitClick;
+
+        this.startupItem.Checked = StartupManager.IsEnabled();
+
+        this.menu.Items.Add(this.statusItem);
+        this.menu.Items.Add(this.deviceItem);
+        this.menu.Items.Add(new ToolStripSeparator());
+        this.menu.Items.Add(this.toggleItem);
+        this.menu.Items.Add(this.pauseItem);
+        this.menu.Items.Add(new ToolStripSeparator());
+        this.menu.Items.Add(this.startupItem);
+        this.menu.Items.Add(this.settingsItem);
+        this.menu.Items.Add(new ToolStripSeparator());
+        this.menu.Items.Add(this.exitItem);
+    }
+
+    private void OnBootstrapTick(object? sender, EventArgs e)
+    {
+        this.bootstrap.Stop();
+        this.uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        this.running = true;
+        this.pollThread = new Thread(this.PollLoop)
+        {
+            IsBackground = true,
+            Name = "shuush-poll",
+        };
+        this.pollThread.Start();
+    }
+
+    private void PollLoop()
+    {
+        try
+        {
+            using TeamsMonitor monitor = new();
+            MuteState last = MuteState.NoCall;
+            bool haveLast = false;
+            bool wasPaused = false;
+            bool wasConnected = false;
+            long lastSafetyScanMs = 0;
+
+            while (this.running)
+            {
+                bool force = Interlocked.Exchange(ref this.forceApply, 0) == 1;
+
+                // A connect/disconnect transition must reapply so the LED and the
+                // "MuteMe not found" status do not stay stale after a replug.
+                this.muteMe.EnsureOpen();
+                bool connected = this.muteMe.IsConnected;
+                if (connected != wasConnected)
+                {
+                    force = true;
+                    wasConnected = connected;
+                }
+
+                if (this.paused)
+                {
+                    this.muteMe.Set(MuteMeDevice.Off);
+                    if (force || !wasPaused || !haveLast)
+                    {
+                        this.PostTrayUpdate(MuteState.NoCall, isPaused: true);
+                    }
+
+                    wasPaused = true;
+                    haveLast = true;
+                    this.pollWake.WaitOne(this.config.IdleIntervalMs);
+                    continue;
+                }
+
+                if (Interlocked.Exchange(ref this.toggleRequested, 0) == 1 && monitor.Toggle())
+                {
+                    MuteState before = haveLast ? last : SafePoll(monitor);
+
+                    // Confirm the flip by polling the button Name rather than waiting
+                    // a fixed delay, so the LED reacts as soon as Teams updates.
+                    for (int i = 0; i < 15 && this.running; i++)
+                    {
+                        if (SafePoll(monitor) != before)
+                        {
+                            break;
+                        }
+
+                        this.pollWake.WaitOne(40);
+                    }
+                }
+
+                // Cheap gate: only walk the Teams accessibility tree when Teams is
+                // actually capturing the microphone (in a call). When it is not, a
+                // full UIA scan would burn CPU only to return NoCall, so skip it and
+                // run an occasional safety scan to cover the rare no-mic-device call.
+                bool micActive = CallActivityProbe.IsTeamsMicActive();
+                long now = Environment.TickCount64;
+                bool safetyDue = now - lastSafetyScanMs > SafetyScanIntervalMs;
+
+                MuteState state;
+                if (micActive || safetyDue)
+                {
+                    state = SafePoll(monitor);
+                    lastSafetyScanMs = now;
+                }
+                else
+                {
+                    state = MuteState.NoCall;
+                }
+
+                if (force || wasPaused || !haveLast || state != last)
+                {
+                    this.ApplyState(state);
+                    last = state;
+                    haveLast = true;
+                }
+
+                wasPaused = false;
+                int interval = micActive ? this.config.PollIntervalMs : this.config.IdleIntervalMs;
+                this.pollWake.WaitOne(interval);
+            }
+        }
+        finally
+        {
+            // Turn the LED off and release the device on the thread that owns LED
+            // writes, after the loop has fully exited.
+            this.muteMe.Close();
+        }
+    }
+
+    private static MuteState SafePoll(TeamsMonitor monitor)
+    {
+        try
+        {
+            return monitor.Poll();
+        }
+        catch (Exception)
+        {
+            return MuteState.NoCall;
+        }
+    }
+
+    private void ApplyState(MuteState state)
+    {
+        AppConfig cfg = this.config;
+        byte command = MuteMeDevice.Off;
+        if (cfg.DriveLed)
+        {
+            command = state switch
+            {
+                MuteState.Muted => LedPalette.ToCommand(cfg.MutedColor),
+                MuteState.Live => LedPalette.ToCommand(cfg.LiveColor),
+                _ => MuteMeDevice.Off,
+            };
+
+            if (cfg.DimLed && command != MuteMeDevice.Off)
+            {
+                command |= MuteMeDevice.DimBit;
+            }
+        }
+
+        this.muteMe.Set(command);
+        this.PostTrayUpdate(state, isPaused: false);
+    }
+
+    private void PostTrayUpdate(MuteState state, bool isPaused)
+    {
+        this.uiContext.Post(_ => this.UpdateTray(state, isPaused), null);
+    }
+
+    private void UpdateTray(MuteState state, bool isPaused)
+    {
+        if (this.disposed)
+        {
+            return;
+        }
+
+        AppConfig cfg = this.config;
+        Color fill;
+        string label;
+        if (isPaused)
+        {
+            fill = Color.FromArgb(120, 120, 120);
+            label = "Paused";
+        }
+        else
+        {
+            label = state switch
+            {
+                MuteState.Muted => "Muted",
+                MuteState.Live => "Live",
+                _ => "Not in a call",
+            };
+
+            fill = !cfg.MirrorTrayColor
+                ? Color.DimGray
+                : state switch
+                {
+                    MuteState.Muted => LedPalette.ToColor(cfg.MutedColor),
+                    MuteState.Live => LedPalette.ToColor(cfg.LiveColor),
+                    _ => Color.FromArgb(110, 110, 110),
+                };
+        }
+
+        Icon icon = TrayIconRenderer.Create(fill, isPaused);
+        Icon? previous = this.notifyIcon.Icon;
+        this.notifyIcon.Icon = icon;
+        previous?.Dispose();
+
+        bool connected = this.muteMe.IsConnected;
+        string suffix = connected ? string.Empty : "  (MuteMe not found)";
+        string text = $"shuush \u2014 {label}{suffix}";
+        this.notifyIcon.Text = text.Length > 63 ? text[..63] : text;
+
+        this.statusItem.Text = isPaused ? "Teams: paused" : $"Teams: {label}";
+        this.deviceItem.Text = connected ? "MuteMe: connected" : "MuteMe: not found";
+        this.toggleItem.Enabled = !isPaused && state != MuteState.NoCall;
+        this.pauseItem.Checked = isPaused;
+    }
+
+    private void OnDeviceTapped() => this.RequestToggle();
+
+    private void OnToggleClick(object? sender, EventArgs e) => this.RequestToggle();
+
+    private void RequestToggle()
+    {
+        if (this.paused)
+        {
+            return;
+        }
+
+        Interlocked.Exchange(ref this.toggleRequested, 1);
+        this.pollWake.Set();
+    }
+
+    private void OnPauseClick(object? sender, EventArgs e)
+    {
+        this.paused = !this.paused;
+        Interlocked.Exchange(ref this.forceApply, 1);
+        this.pollWake.Set();
+    }
+
+    private void OnStartupClick(object? sender, EventArgs e)
+    {
+        bool enable = !this.startupItem.Checked;
+        StartupManager.SetEnabled(enable);
+        this.startupItem.Checked = StartupManager.IsEnabled();
+        this.config.StartWithWindows = this.startupItem.Checked;
+        this.config.Save();
+    }
+
+    private void OnSettingsClick(object? sender, EventArgs e)
+    {
+        using SettingsForm form = new();
+        form.Initialize(this.config.Clone());
+        if (form.ShowDialog() == DialogResult.OK)
+        {
+            this.config = form.UpdatedConfig;
+            this.config.Save();
+            StartupManager.SetEnabled(this.config.StartWithWindows);
+            this.startupItem.Checked = StartupManager.IsEnabled();
+            Interlocked.Exchange(ref this.forceApply, 1);
+            this.pollWake.Set();
+        }
+    }
+
+    private void OnExitClick(object? sender, EventArgs e) => this.ExitThread();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (!this.disposed && disposing)
+        {
+            this.disposed = true;
+            this.running = false;
+            this.pollWake.Set();
+
+            // Wait for the poll thread to actually exit before tearing down shared
+            // state it touches (pollWake, the MuteMe device). If a UIA call is wedged
+            // past the timeout, leave those objects for process teardown rather than
+            // disposing them out from under a live thread.
+            bool threadStopped = this.pollThread is null || this.pollThread.Join(4000);
+
+            this.muteMe.Tapped -= this.OnDeviceTapped;
+            if (this.pollThread is null)
+            {
+                // The poll loop never ran, so its finally never closed the device.
+                this.muteMe.Close();
+            }
+
+            this.bootstrap.Dispose();
+            if (threadStopped)
+            {
+                this.muteMe.Dispose();
+                this.pollWake.Dispose();
+            }
+
+            this.notifyIcon.Visible = false;
+            Icon? icon = this.notifyIcon.Icon;
+            this.notifyIcon.Icon = null;
+            icon?.Dispose();
+            this.notifyIcon.Dispose();
+            this.menu.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
+}

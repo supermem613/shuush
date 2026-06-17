@@ -1,6 +1,11 @@
-node_modules/
+# Build output
+bin/
+obj/
 
-# Teams pairing token. This is a per-machine credential. Never commit it.
-token.json
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
 
+# Logs
 *.log
