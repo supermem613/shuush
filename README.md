@@ -34,9 +34,15 @@ Two halves, both local to your machine, bridged by a tray app:
    (`red 0x01`, `green 0x02`, `blue 0x04`, `dim 0x10`, `blink 0x20`). A physical
    tap arrives as an input report; `shuush` fires on release.
 
+Windows records which apps are using the microphone under the
+CapabilityAccessManager consent store in the registry. `shuush` watches that key
+with `RegNotifyChangeKeyValue`, so while you are not in a call the poll loop
+blocks on the change event instead of polling and idle CPU is effectively zero.
+The moment Teams takes the microphone the watcher wakes the loop, which then
+re-reads the UI Automation state on a short cadence until the call ends.
+
 A background thread owns all UI Automation work and the poll loop, drives the
-LED, and marshals tray-icon updates to the UI thread. Polling slows down while
-you are not in a call to keep idle CPU low.
+LED, and marshals tray-icon updates to the UI thread.
 
 ## Requirements
 
@@ -74,7 +80,6 @@ Settings persist to `%AppData%\shuush\config.json`:
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | Poll interval (in call) | 750 ms | How often to re-read mute state during a call |
-| Idle interval (no call) | 2000 ms | Slower poll while not in a call |
 | Muted color / Live color | Red / Green | LED + tray colors from the MuteMe palette |
 | Drive the MuteMe LED | on | Turn LED control off entirely |
 | Dim the LED | off | Apply the dim bit |
@@ -91,12 +96,16 @@ purple, white.
 | `Program.cs` | Entry point, single-instance guard |
 | `TrayContext.cs` | Tray icon, flyout menu, poll thread, state -> color |
 | `TeamsMonitor.cs` | UI Automation: read and toggle the Teams mic button |
+| `MuteState.cs` | Mute-state enum: no call, live, muted |
+| `CallActivityProbe.cs` | Registry probe: is Teams using the microphone (in a call) |
+| `MicActivityWatcher.cs` | Registry-change watcher that wakes the poll loop when a call starts |
 | `MuteMeDevice.cs` | USB HID: LED output and button-tap input |
 | `TrayIconRenderer.cs` | Colored-dot tray icon rendering |
 | `LedPalette.cs` | MuteMe color palette -> HID command and tray color |
 | `AppConfig.cs` | Settings load/save |
 | `StartupManager.cs` | Start-with-Windows registration |
 | `SettingsForm.cs` | Settings dialog |
+| `NativeMethods.cs` | P/Invoke declarations for registry change notifications |
 
 ## License
 
