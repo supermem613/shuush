@@ -15,10 +15,13 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox mirrorTrayInput = new();
     private readonly ComboBox mutedColorInput = new();
     private readonly ComboBox liveColorInput = new();
+    private readonly ComboBox noCallColorInput = new();
+    private readonly ComboBox pausedColorInput = new();
     private readonly CheckBox startupInput = new();
 
     private AppConfig working = new();
     private int gridRow;
+    private bool initializing;
 
     public SettingsForm()
     {
@@ -34,19 +37,39 @@ internal sealed class SettingsForm : Form
     }
 
     /// <summary>The edited config, valid only after an OK result.</summary>
-    public AppConfig UpdatedConfig => this.working;
+    public AppConfig UpdatedConfig
+    {
+        get
+        {
+            this.UpdateWorkingFromInputs();
+            return this.working;
+        }
+    }
+
+    /// <summary>Raised when a mode color is changed and should be previewed immediately.</summary>
+    public event Action<AppConfig, MuteState, bool>? PreviewChanged;
 
     /// <summary>Populates the dialog from a config to edit.</summary>
     public void Initialize(AppConfig config)
     {
-        this.working = config;
-        this.pollInput.Value = Math.Clamp(config.PollIntervalMs, (int)this.pollInput.Minimum, (int)this.pollInput.Maximum);
-        this.driveLedInput.Checked = config.DriveLed;
-        this.dimLedInput.Checked = config.DimLed;
-        this.mirrorTrayInput.Checked = config.MirrorTrayColor;
-        this.mutedColorInput.SelectedItem = config.MutedColor;
-        this.liveColorInput.SelectedItem = config.LiveColor;
-        this.startupInput.Checked = StartupManager.IsEnabled();
+        this.initializing = true;
+        try
+        {
+            this.working = config;
+            this.pollInput.Value = Math.Clamp(config.PollIntervalMs, (int)this.pollInput.Minimum, (int)this.pollInput.Maximum);
+            this.driveLedInput.Checked = config.DriveLed;
+            this.dimLedInput.Checked = config.DimLed;
+            this.mirrorTrayInput.Checked = config.MirrorTrayColor;
+            this.mutedColorInput.SelectedItem = config.MutedColor;
+            this.liveColorInput.SelectedItem = config.LiveColor;
+            this.noCallColorInput.SelectedItem = config.NoCallColor;
+            this.pausedColorInput.SelectedItem = config.PausedColor;
+            this.startupInput.Checked = StartupManager.IsEnabled();
+        }
+        finally
+        {
+            this.initializing = false;
+        }
     }
 
     private void BuildLayout()
@@ -74,12 +97,26 @@ internal sealed class SettingsForm : Form
         this.mutedColorInput.DropDownStyle = ComboBoxStyle.DropDownList;
         this.mutedColorInput.Width = 150;
         this.mutedColorInput.Items.AddRange(LedPalette.Names.ToArray());
+        this.mutedColorInput.SelectedIndexChanged += (_, _) => this.OnPreviewChanged(MuteState.Muted, isPaused: false);
         this.AddFieldRow(grid, "Muted color", this.mutedColorInput);
 
         this.liveColorInput.DropDownStyle = ComboBoxStyle.DropDownList;
         this.liveColorInput.Width = 150;
         this.liveColorInput.Items.AddRange(LedPalette.Names.ToArray());
+        this.liveColorInput.SelectedIndexChanged += (_, _) => this.OnPreviewChanged(MuteState.Live, isPaused: false);
         this.AddFieldRow(grid, "Live color", this.liveColorInput);
+
+        this.noCallColorInput.DropDownStyle = ComboBoxStyle.DropDownList;
+        this.noCallColorInput.Width = 150;
+        this.noCallColorInput.Items.AddRange(LedPalette.Names.ToArray());
+        this.noCallColorInput.SelectedIndexChanged += (_, _) => this.OnPreviewChanged(MuteState.NoCall, isPaused: false);
+        this.AddFieldRow(grid, "Not-in-call color", this.noCallColorInput);
+
+        this.pausedColorInput.DropDownStyle = ComboBoxStyle.DropDownList;
+        this.pausedColorInput.Width = 150;
+        this.pausedColorInput.Items.AddRange(LedPalette.Names.ToArray());
+        this.pausedColorInput.SelectedIndexChanged += (_, _) => this.OnPreviewChanged(MuteState.NoCall, isPaused: true);
+        this.AddFieldRow(grid, "Paused color", this.pausedColorInput);
 
         this.driveLedInput.Text = "Drive the MuteMe LED";
         this.AddCheckRow(grid, this.driveLedInput);
@@ -167,12 +204,30 @@ internal sealed class SettingsForm : Form
 
     private void OnOk(object? sender, EventArgs e)
     {
+        this.UpdateWorkingFromInputs();
+    }
+
+    private void OnPreviewChanged(MuteState state, bool isPaused)
+    {
+        if (this.initializing)
+        {
+            return;
+        }
+
+        this.UpdateWorkingFromInputs();
+        this.PreviewChanged?.Invoke(this.working.Clone(), state, isPaused);
+    }
+
+    private void UpdateWorkingFromInputs()
+    {
         this.working.PollIntervalMs = (int)this.pollInput.Value;
         this.working.DriveLed = this.driveLedInput.Checked;
         this.working.DimLed = this.dimLedInput.Checked;
         this.working.MirrorTrayColor = this.mirrorTrayInput.Checked;
         this.working.MutedColor = this.mutedColorInput.SelectedItem as string ?? "Red";
         this.working.LiveColor = this.liveColorInput.SelectedItem as string ?? "Green";
+        this.working.NoCallColor = this.noCallColorInput.SelectedItem as string ?? "Off";
+        this.working.PausedColor = this.pausedColorInput.SelectedItem as string ?? "Off";
         this.working.StartWithWindows = this.startupInput.Checked;
     }
 }

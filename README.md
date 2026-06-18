@@ -65,9 +65,9 @@ dotnet build -c Release
 `shuush` runs in the system tray. Right-click the tray icon for the menu:
 
 - **Toggle mute** - press the Teams mic button (enabled only while in a call).
-- **Pause** - stop driving the LED and detection (LED off, grey paused icon).
+- **Pause** - stop detection and show the configured paused color.
 - **Start with Windows** - register/unregister an HKCU sign-in entry.
-- **Settings...** - poll intervals, LED colors, dim, tray-color mirroring.
+- **Settings...** - poll intervals, mode colors, dim, tray-color mirroring.
 - **Exit**.
 
 Quit the MuteMe vendor app (MuteMe-Client) first so the two don't fight over the
@@ -81,13 +81,19 @@ Settings persist to `%AppData%\shuush\config.json`:
 |---------|---------|---------|
 | Poll interval (in call) | 750 ms | How often to re-read mute state during a call |
 | Muted color / Live color | Red / Green | LED + tray colors from the MuteMe palette |
+| Not-in-call color / Paused color | Off / Off | LED + tray colors from the MuteMe palette |
 | Drive the MuteMe LED | on | Turn LED control off entirely |
 | Dim the LED | off | Apply the dim bit |
 | Tray icon color follows mute state | on | Off keeps a neutral tray icon |
 | Start with Windows | off | Launch at sign-in |
 
-The LED can only show the seven bitmask colors: red, green, blue, yellow, cyan,
-purple, white.
+Mode colors can be off or one of the seven bitmask colors: red, green, blue,
+yellow, cyan, purple, white.
+
+Changing a mode color in Settings previews only when that mode is currently
+active. Muted, live, not-in-call, and paused each preview only while that
+matching state is active.
+OK saves the selected settings, Cancel restores the previous saved settings.
 
 ## Project layout
 

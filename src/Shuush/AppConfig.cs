@@ -27,6 +27,12 @@ internal sealed class AppConfig
     /// <summary>Palette name used while live (unmuted, in a call).</summary>
     public string LiveColor { get; set; } = "Green";
 
+    /// <summary>Palette name used while not in a call.</summary>
+    public string NoCallColor { get; set; } = "Off";
+
+    /// <summary>Palette name used while paused.</summary>
+    public string PausedColor { get; set; } = "Off";
+
     /// <summary>Whether shuush launches at sign-in (HKCU Run key).</summary>
     public bool StartWithWindows { get; set; }
 
@@ -99,6 +105,8 @@ internal sealed class AppConfig
         MirrorTrayColor = this.MirrorTrayColor,
         MutedColor = this.MutedColor,
         LiveColor = this.LiveColor,
+        NoCallColor = this.NoCallColor,
+        PausedColor = this.PausedColor,
         StartWithWindows = this.StartWithWindows,
     };
 
@@ -113,6 +121,16 @@ internal sealed class AppConfig
         if (!LedPalette.Names.Contains(this.LiveColor))
         {
             this.LiveColor = "Green";
+        }
+
+        if (!LedPalette.Names.Contains(this.NoCallColor))
+        {
+            this.NoCallColor = "Off";
+        }
+
+        if (!LedPalette.Names.Contains(this.PausedColor))
+        {
+            this.PausedColor = "Off";
         }
     }
 }

@@ -34,6 +34,9 @@ internal sealed class TrayContext : ApplicationContext
     private Thread? pollThread;
     private volatile bool running;
     private volatile bool paused;
+    private int previewActive;
+    private int previewState;
+    private int previewPaused;
     private int toggleRequested;
     private int forceApply;
     private bool disposed;
@@ -130,12 +133,20 @@ internal sealed class TrayContext : ApplicationContext
                 // physical tap is still detected during a call whose color is static.
                 this.muteMe.Refresh();
 
+                bool previewRequested = Interlocked.Exchange(ref this.previewActive, 0) == 1;
+                MuteState previewStateValue = (MuteState)Volatile.Read(ref this.previewState);
+                bool previewIsPaused = Volatile.Read(ref this.previewPaused) == 1;
+
                 if (this.paused)
                 {
-                    this.muteMe.Set(MuteMeDevice.Off);
+                    if (previewRequested && previewIsPaused)
+                    {
+                        force = true;
+                    }
+
                     if (force || !wasPaused || !haveLast)
                     {
-                        this.PostTrayUpdate(MuteState.NoCall, isPaused: true);
+                        this.ApplyState(MuteState.NoCall, isPaused: true);
                     }
 
                     wasPaused = true;
@@ -183,6 +194,10 @@ internal sealed class TrayContext : ApplicationContext
                 // the registry watcher wake us the moment a call begins.
                 bool micActive = CallActivityProbe.IsTeamsMicActive();
                 MuteState state = micActive ? SafePoll(monitor) : MuteState.NoCall;
+                if (previewRequested && !previewIsPaused && state == previewStateValue)
+                {
+                    force = true;
+                }
 
                 if (force || wasPaused || !haveLast || state != last)
                 {
@@ -220,18 +235,27 @@ internal sealed class TrayContext : ApplicationContext
         }
     }
 
-    private void ApplyState(MuteState state)
+    private void ApplyState(MuteState state, bool isPaused = false)
     {
         AppConfig cfg = this.config;
+        byte command = ToLedCommand(cfg, state, isPaused);
+        this.muteMe.Set(command);
+        this.PostTrayUpdate(state, isPaused);
+    }
+
+    private static byte ToLedCommand(AppConfig cfg, MuteState state, bool isPaused)
+    {
         byte command = MuteMeDevice.Off;
         if (cfg.DriveLed)
         {
-            command = state switch
-            {
-                MuteState.Muted => LedPalette.ToCommand(cfg.MutedColor),
-                MuteState.Live => LedPalette.ToCommand(cfg.LiveColor),
-                _ => MuteMeDevice.Off,
-            };
+            command = isPaused
+                ? LedPalette.ToCommand(cfg.PausedColor)
+                : state switch
+                {
+                    MuteState.Muted => LedPalette.ToCommand(cfg.MutedColor),
+                    MuteState.Live => LedPalette.ToCommand(cfg.LiveColor),
+                    _ => LedPalette.ToCommand(cfg.NoCallColor),
+                };
 
             if (cfg.DimLed && command != MuteMeDevice.Off)
             {
@@ -239,8 +263,7 @@ internal sealed class TrayContext : ApplicationContext
             }
         }
 
-        this.muteMe.Set(command);
-        this.PostTrayUpdate(state, isPaused: false);
+        return command;
     }
 
     private void PostTrayUpdate(MuteState state, bool isPaused)
@@ -260,7 +283,7 @@ internal sealed class TrayContext : ApplicationContext
         string label;
         if (isPaused)
         {
-            fill = Color.FromArgb(120, 120, 120);
+            fill = cfg.MirrorTrayColor ? LedPalette.ToColor(cfg.PausedColor) : Color.DimGray;
             label = "Paused";
         }
         else
@@ -278,7 +301,7 @@ internal sealed class TrayContext : ApplicationContext
                 {
                     MuteState.Muted => LedPalette.ToColor(cfg.MutedColor),
                     MuteState.Live => LedPalette.ToColor(cfg.LiveColor),
-                    _ => Color.FromArgb(110, 110, 110),
+                    _ => LedPalette.ToColor(cfg.NoCallColor),
                 };
         }
 
@@ -331,17 +354,33 @@ internal sealed class TrayContext : ApplicationContext
 
     private void OnSettingsClick(object? sender, EventArgs e)
     {
+        AppConfig originalConfig = this.config.Clone();
         using SettingsForm form = new();
         form.Initialize(this.config.Clone());
+        form.PreviewChanged += this.OnSettingsPreviewChanged;
+
+        AppConfig finalConfig = originalConfig;
         if (form.ShowDialog() == DialogResult.OK)
         {
-            this.config = form.UpdatedConfig;
-            this.config.Save();
-            StartupManager.SetEnabled(this.config.StartWithWindows);
+            finalConfig = form.UpdatedConfig;
+            finalConfig.Save();
+            StartupManager.SetEnabled(finalConfig.StartWithWindows);
             this.startupItem.Checked = StartupManager.IsEnabled();
-            Interlocked.Exchange(ref this.forceApply, 1);
-            this.pollWake.Set();
         }
+
+        Volatile.Write(ref this.previewActive, 0);
+        this.config = finalConfig;
+        Interlocked.Exchange(ref this.forceApply, 1);
+        this.pollWake.Set();
+    }
+
+    private void OnSettingsPreviewChanged(AppConfig previewConfig, MuteState state, bool isPaused)
+    {
+        this.config = previewConfig;
+        Volatile.Write(ref this.previewState, (int)state);
+        Volatile.Write(ref this.previewPaused, isPaused ? 1 : 0);
+        Volatile.Write(ref this.previewActive, 1);
+        this.pollWake.Set();
     }
 
     private void OnExitClick(object? sender, EventArgs e) => this.ExitThread();
