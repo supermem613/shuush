@@ -10,7 +10,6 @@ namespace Shuush;
 internal sealed class SettingsForm : Form
 {
     private readonly NumericUpDown pollInput = new();
-    private readonly NumericUpDown idleInput = new();
     private readonly CheckBox driveLedInput = new();
     private readonly CheckBox dimLedInput = new();
     private readonly CheckBox mirrorTrayInput = new();
@@ -19,6 +18,7 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox startupInput = new();
 
     private AppConfig working = new();
+    private int gridRow;
 
     public SettingsForm()
     {
@@ -27,7 +27,8 @@ internal sealed class SettingsForm : Form
         this.MaximizeBox = false;
         this.MinimizeBox = false;
         this.StartPosition = FormStartPosition.CenterScreen;
-        this.ClientSize = new Size(340, 320);
+        this.AutoSize = true;
+        this.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         this.ShowInTaskbar = false;
         this.BuildLayout();
     }
@@ -40,7 +41,6 @@ internal sealed class SettingsForm : Form
     {
         this.working = config;
         this.pollInput.Value = Math.Clamp(config.PollIntervalMs, (int)this.pollInput.Minimum, (int)this.pollInput.Maximum);
-        this.idleInput.Value = Math.Clamp(config.IdleIntervalMs, (int)this.idleInput.Minimum, (int)this.idleInput.Maximum);
         this.driveLedInput.Checked = config.DriveLed;
         this.dimLedInput.Checked = config.DimLed;
         this.mirrorTrayInput.Checked = config.MirrorTrayColor;
@@ -51,96 +51,123 @@ internal sealed class SettingsForm : Form
 
     private void BuildLayout()
     {
-        int y = 16;
-        const int LabelX = 16;
-        const int FieldX = 180;
-        const int RowH = 30;
+        TableLayoutPanel grid = new()
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            Padding = new Padding(14, 14, 14, 10),
+        };
 
-        AddLabel("Poll interval (ms, in call)", LabelX, y);
+        // Column 0 sizes to the widest label so labels always get the room they need;
+        // column 1 takes the rest for the fields.
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
         this.pollInput.Minimum = 200;
         this.pollInput.Maximum = 5000;
         this.pollInput.Increment = 50;
-        this.pollInput.SetBounds(FieldX, y - 2, 140, 24);
-        this.Controls.Add(this.pollInput);
-        y += RowH;
+        this.pollInput.Width = 90;
+        this.AddFieldRow(grid, "Poll interval (ms, in call)", this.pollInput);
 
-        AddLabel("Idle interval (ms, no call)", LabelX, y);
-        this.idleInput.Minimum = 200;
-        this.idleInput.Maximum = 10000;
-        this.idleInput.Increment = 250;
-        this.idleInput.SetBounds(FieldX, y - 2, 140, 24);
-        this.Controls.Add(this.idleInput);
-        y += RowH;
-
-        AddLabel("Muted color", LabelX, y);
         this.mutedColorInput.DropDownStyle = ComboBoxStyle.DropDownList;
-        this.mutedColorInput.SetBounds(FieldX, y - 2, 140, 24);
+        this.mutedColorInput.Width = 150;
         this.mutedColorInput.Items.AddRange(LedPalette.Names.ToArray());
-        this.Controls.Add(this.mutedColorInput);
-        y += RowH;
+        this.AddFieldRow(grid, "Muted color", this.mutedColorInput);
 
-        AddLabel("Live color", LabelX, y);
         this.liveColorInput.DropDownStyle = ComboBoxStyle.DropDownList;
-        this.liveColorInput.SetBounds(FieldX, y - 2, 140, 24);
+        this.liveColorInput.Width = 150;
         this.liveColorInput.Items.AddRange(LedPalette.Names.ToArray());
-        this.Controls.Add(this.liveColorInput);
-        y += RowH + 4;
+        this.AddFieldRow(grid, "Live color", this.liveColorInput);
 
         this.driveLedInput.Text = "Drive the MuteMe LED";
-        this.driveLedInput.SetBounds(LabelX, y, 300, 22);
-        this.Controls.Add(this.driveLedInput);
-        y += 26;
+        this.AddCheckRow(grid, this.driveLedInput);
 
         this.dimLedInput.Text = "Dim the LED";
-        this.dimLedInput.SetBounds(LabelX, y, 300, 22);
-        this.Controls.Add(this.dimLedInput);
-        y += 26;
+        this.AddCheckRow(grid, this.dimLedInput);
 
         this.mirrorTrayInput.Text = "Tray icon color follows mute state";
-        this.mirrorTrayInput.SetBounds(LabelX, y, 300, 22);
-        this.Controls.Add(this.mirrorTrayInput);
-        y += 26;
+        this.AddCheckRow(grid, this.mirrorTrayInput);
 
         this.startupInput.Text = "Start with Windows";
-        this.startupInput.SetBounds(LabelX, y, 300, 22);
-        this.Controls.Add(this.startupInput);
+        this.AddCheckRow(grid, this.startupInput);
 
         Button ok = new()
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
+            AutoSize = true,
+            MinimumSize = new Size(82, 27),
+            Margin = new Padding(6, 0, 0, 0),
         };
-        ok.SetBounds(this.ClientSize.Width - 180, this.ClientSize.Height - 38, 78, 26);
         ok.Click += this.OnOk;
 
         Button cancel = new()
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
+            AutoSize = true,
+            MinimumSize = new Size(82, 27),
+            Margin = new Padding(6, 0, 0, 0),
         };
-        cancel.SetBounds(this.ClientSize.Width - 96, this.ClientSize.Height - 38, 78, 26);
 
-        this.Controls.Add(ok);
-        this.Controls.Add(cancel);
+        // Right-to-left flow puts the first-added control at the right edge, so add
+        // Cancel first to land OK to its left in the conventional [OK] [Cancel] order.
+        FlowLayoutPanel buttons = new()
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(0, 12, 0, 0),
+        };
+        buttons.Controls.Add(cancel);
+        buttons.Controls.Add(ok);
+
+        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        grid.Controls.Add(buttons, 0, this.gridRow);
+        grid.SetColumnSpan(buttons, 2);
+        this.gridRow++;
+
         this.AcceptButton = ok;
         this.CancelButton = cancel;
+        this.Controls.Add(grid);
     }
 
-    private void AddLabel(string text, int x, int y)
+    private void AddFieldRow(TableLayoutPanel grid, string text, Control field)
     {
         Label label = new()
         {
             Text = text,
             AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 0, 16, 0),
         };
-        label.SetBounds(x, y, 160, 22);
-        this.Controls.Add(label);
+        field.Anchor = AnchorStyles.Left;
+        field.Margin = new Padding(0, 4, 0, 4);
+
+        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        grid.Controls.Add(label, 0, this.gridRow);
+        grid.Controls.Add(field, 1, this.gridRow);
+        this.gridRow++;
+    }
+
+    private void AddCheckRow(TableLayoutPanel grid, CheckBox box)
+    {
+        box.AutoSize = true;
+        box.Anchor = AnchorStyles.Left;
+        box.Margin = new Padding(0, 5, 0, 1);
+
+        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        grid.Controls.Add(box, 0, this.gridRow);
+        grid.SetColumnSpan(box, 2);
+        this.gridRow++;
     }
 
     private void OnOk(object? sender, EventArgs e)
     {
         this.working.PollIntervalMs = (int)this.pollInput.Value;
-        this.working.IdleIntervalMs = (int)this.idleInput.Value;
         this.working.DriveLed = this.driveLedInput.Checked;
         this.working.DimLed = this.dimLedInput.Checked;
         this.working.MirrorTrayColor = this.mirrorTrayInput.Checked;

@@ -21,6 +21,9 @@ internal static class CallActivityProbe
     private const string MicrophonePath =
         @"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
 
+    /// <summary>Registry path of the per-app microphone consent store, under HKCU.</summary>
+    internal const string MicrophoneKeyPath = MicrophonePath;
+
     /// <summary>Whether a Teams app is currently capturing the microphone.</summary>
     public static bool IsTeamsMicActive()
     {

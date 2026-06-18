@@ -38,11 +38,6 @@ internal sealed class TrayContext : ApplicationContext
     private int forceApply;
     private bool disposed;
 
-    // The registry gate is the primary in-call trigger; this occasional full scan
-    // is only a backstop for a call where Teams holds no microphone, so keep it
-    // infrequent to hold idle CPU down.
-    private const long SafetyScanIntervalMs = 60_000;
-
     public TrayContext()
     {
         this.config = AppConfig.Load();
@@ -104,11 +99,17 @@ internal sealed class TrayContext : ApplicationContext
         try
         {
             using TeamsMonitor monitor = new();
+
+            // A registry-change watcher wakes this loop the instant Teams acquires or
+            // releases the microphone, so an idle loop blocks on the safety-scan backstop
+            // and is woken early by a real call transition rather than re-reading the
+            // consent store on a short timer.
+            using MicActivityWatcher micWatcher = MicActivityWatcher.Create(() => this.pollWake.Set());
+
             MuteState last = MuteState.NoCall;
             bool haveLast = false;
             bool wasPaused = false;
             bool wasConnected = false;
-            long lastSafetyScanMs = 0;
 
             while (this.running)
             {
@@ -139,7 +140,7 @@ internal sealed class TrayContext : ApplicationContext
 
                     wasPaused = true;
                     haveLast = true;
-                    this.pollWake.WaitOne(this.config.IdleIntervalMs);
+                    this.pollWake.WaitOne(Timeout.Infinite);
                     continue;
                 }
 
@@ -176,24 +177,12 @@ internal sealed class TrayContext : ApplicationContext
                     }
                 }
 
-                // Cheap gate: only walk the Teams accessibility tree when Teams is
-                // actually capturing the microphone (in a call). When it is not, a
-                // full UIA scan would burn CPU only to return NoCall, so skip it and
-                // run an occasional safety scan to cover the rare no-mic-device call.
+                // Only walk the Teams accessibility tree when Teams is actually
+                // capturing the microphone (in a call). When it is not, a full UIA scan
+                // would burn CPU only to return NoCall, so report NoCall directly and let
+                // the registry watcher wake us the moment a call begins.
                 bool micActive = CallActivityProbe.IsTeamsMicActive();
-                long now = Environment.TickCount64;
-                bool safetyDue = now - lastSafetyScanMs > SafetyScanIntervalMs;
-
-                MuteState state;
-                if (micActive || safetyDue)
-                {
-                    state = SafePoll(monitor);
-                    lastSafetyScanMs = now;
-                }
-                else
-                {
-                    state = MuteState.NoCall;
-                }
+                MuteState state = micActive ? SafePoll(monitor) : MuteState.NoCall;
 
                 if (force || wasPaused || !haveLast || state != last)
                 {
@@ -203,7 +192,11 @@ internal sealed class TrayContext : ApplicationContext
                 }
 
                 wasPaused = false;
-                int interval = micActive ? this.config.PollIntervalMs : this.config.IdleIntervalMs;
+
+                // In a call, poll fast for the UIA mute state. Idle, block until the
+                // registry watcher signals a call start or a menu action wakes the loop,
+                // so idle costs zero CPU with no timed wakeups.
+                int interval = micActive ? this.config.PollIntervalMs : Timeout.Infinite;
                 this.pollWake.WaitOne(interval);
             }
         }

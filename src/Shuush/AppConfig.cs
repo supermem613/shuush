@@ -12,9 +12,6 @@ internal sealed class AppConfig
     /// <summary>Poll cadence while in a call, in milliseconds.</summary>
     public int PollIntervalMs { get; set; } = 750;
 
-    /// <summary>Poll cadence while not in a call, in milliseconds. Slower to keep idle CPU low.</summary>
-    public int IdleIntervalMs { get; set; } = 2000;
-
     /// <summary>Whether to drive the MuteMe LED at all.</summary>
     public bool DriveLed { get; set; } = true;
 
@@ -97,7 +94,6 @@ internal sealed class AppConfig
     public AppConfig Clone() => new()
     {
         PollIntervalMs = this.PollIntervalMs,
-        IdleIntervalMs = this.IdleIntervalMs,
         DriveLed = this.DriveLed,
         DimLed = this.DimLed,
         MirrorTrayColor = this.MirrorTrayColor,
@@ -109,7 +105,6 @@ internal sealed class AppConfig
     private void Normalize()
     {
         this.PollIntervalMs = Math.Clamp(this.PollIntervalMs, 200, 5000);
-        this.IdleIntervalMs = Math.Clamp(this.IdleIntervalMs, this.PollIntervalMs, 10000);
         if (!LedPalette.Names.Contains(this.MutedColor))
         {
             this.MutedColor = "Red";
