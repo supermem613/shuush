@@ -193,7 +193,14 @@ internal sealed class TrayContext : ApplicationContext
                 // would burn CPU only to return NoCall, so report NoCall directly and let
                 // the registry watcher wake us the moment a call begins.
                 bool micActive = CallActivityProbe.IsTeamsMicActive();
-                MuteState state = micActive ? SafePoll(monitor) : MuteState.NoCall;
+                MuteState polled = micActive ? SafePoll(monitor) : MuteState.NoCall;
+
+                // A single UIA poll returns NoCall whenever the WebView2 toolbar is
+                // mid re-render and the microphone button is momentarily unfindable.
+                // The mic-active registry gate does not blink like that, so while it
+                // says a call is up, hold the last in-call state across that miss
+                // instead of flashing the LED and tray to the not-in-call color.
+                MuteState state = CallStateResolver.Resolve(micActive, polled, last, haveLast);
                 if (previewRequested && !previewIsPaused && state == previewStateValue)
                 {
                     force = true;

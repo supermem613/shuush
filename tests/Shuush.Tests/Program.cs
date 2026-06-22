@@ -12,6 +12,12 @@ internal static class Program
             Console.WriteLine("PASS SettingsDialogPersistsDisplayedNoCallColor");
             SettingsDialogOkPersistsNoCallColorAcrossReload();
             Console.WriteLine("PASS SettingsDialogOkPersistsNoCallColorAcrossReload");
+            ActiveCallHoldsLiveAcrossTransientMissedPoll();
+            Console.WriteLine("PASS ActiveCallHoldsLiveAcrossTransientMissedPoll");
+            ActiveCallHoldsMutedAcrossTransientMissedPoll();
+            Console.WriteLine("PASS ActiveCallHoldsMutedAcrossTransientMissedPoll");
+            EndedCallReportsNoCall();
+            Console.WriteLine("PASS EndedCallReportsNoCall");
             return 0;
         }
         catch (Exception ex)
@@ -19,6 +25,58 @@ internal static class Program
             Console.Error.WriteLine(ex.Message);
             return 1;
         }
+    }
+
+    private static void ActiveCallHoldsLiveAcrossTransientMissedPoll()
+    {
+        MuteState resolved = ResolveCallState(micActive: true, polled: MuteState.NoCall, last: MuteState.Live, haveLast: true);
+        if (resolved != MuteState.Live)
+        {
+            throw new InvalidOperationException(
+                $"A transient missed poll during an active call must hold Live, but resolved to {resolved}.");
+        }
+    }
+
+    private static void ActiveCallHoldsMutedAcrossTransientMissedPoll()
+    {
+        MuteState resolved = ResolveCallState(micActive: true, polled: MuteState.NoCall, last: MuteState.Muted, haveLast: true);
+        if (resolved != MuteState.Muted)
+        {
+            throw new InvalidOperationException(
+                $"A transient missed poll during an active call must hold Muted, but resolved to {resolved}.");
+        }
+    }
+
+    private static void EndedCallReportsNoCall()
+    {
+        MuteState resolved = ResolveCallState(micActive: false, polled: MuteState.NoCall, last: MuteState.Live, haveLast: true);
+        if (resolved != MuteState.NoCall)
+        {
+            throw new InvalidOperationException(
+                $"When the mic gate reports the call ended, the state must be NoCall, but resolved to {resolved}.");
+        }
+    }
+
+    private static MuteState ResolveCallState(bool micActive, MuteState polled, MuteState last, bool haveLast)
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type resolverType = assembly.GetType("Shuush.CallStateResolver", throwOnError: true)!;
+        Type stateType = assembly.GetType("Shuush.MuteState", throwOnError: true)!;
+        object result = resolverType.GetMethod("Resolve")!.Invoke(null, new object[]
+        {
+            micActive,
+            Enum.ToObject(stateType, (int)polled),
+            Enum.ToObject(stateType, (int)last),
+            haveLast,
+        })!;
+        return (MuteState)(int)result;
+    }
+
+    private enum MuteState
+    {
+        NoCall,
+        Live,
+        Muted,
     }
 
     private static void SettingsDialogPersistsDisplayedNoCallColor()
