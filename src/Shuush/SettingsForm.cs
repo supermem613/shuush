@@ -13,6 +13,7 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox driveLedInput = new();
     private readonly CheckBox dimLedInput = new();
     private readonly CheckBox mirrorTrayInput = new();
+    private readonly CheckBox autoMuteInput = new();
     private readonly ComboBox mutedColorInput = new();
     private readonly ComboBox liveColorInput = new();
     private readonly ComboBox noCallColorInput = new();
@@ -60,6 +61,7 @@ internal sealed class SettingsForm : Form
             this.driveLedInput.Checked = config.DriveLed;
             this.dimLedInput.Checked = config.DimLed;
             this.mirrorTrayInput.Checked = config.MirrorTrayColor;
+            this.autoMuteInput.Checked = config.AutoMuteOnMeetingStart;
             this.mutedColorInput.SelectedItem = config.MutedColor;
             this.liveColorInput.SelectedItem = config.LiveColor;
             this.noCallColorInput.SelectedItem = config.NoCallColor;
@@ -117,6 +119,9 @@ internal sealed class SettingsForm : Form
         this.pausedColorInput.Items.AddRange(LedPalette.Names.ToArray());
         this.pausedColorInput.SelectedIndexChanged += (_, _) => this.OnPreviewChanged(MuteState.NoCall, isPaused: true);
         this.AddFieldRow(grid, "Paused color", this.pausedColorInput);
+
+        this.autoMuteInput.Text = "Mute mic at the start of every meeting";
+        this.AddCheckRow(grid, this.autoMuteInput);
 
         this.driveLedInput.Text = "Drive the MuteMe LED";
         this.AddCheckRow(grid, this.driveLedInput);
@@ -224,6 +229,7 @@ internal sealed class SettingsForm : Form
         this.working.DriveLed = this.driveLedInput.Checked;
         this.working.DimLed = this.dimLedInput.Checked;
         this.working.MirrorTrayColor = this.mirrorTrayInput.Checked;
+        this.working.AutoMuteOnMeetingStart = this.autoMuteInput.Checked;
         this.working.MutedColor = this.mutedColorInput.SelectedItem as string ?? "Red";
         this.working.LiveColor = this.liveColorInput.SelectedItem as string ?? "Green";
         this.working.NoCallColor = this.noCallColorInput.SelectedItem as string ?? "Off";

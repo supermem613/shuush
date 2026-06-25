@@ -113,6 +113,7 @@ internal sealed class TrayContext : ApplicationContext
             bool haveLast = false;
             bool wasPaused = false;
             bool wasConnected = false;
+            bool autoMutePending = false;
 
             while (this.running)
             {
@@ -139,6 +140,10 @@ internal sealed class TrayContext : ApplicationContext
 
                 if (this.paused)
                 {
+                    // A paused call must not carry a stale auto-mute intent into the
+                    // next unpause, where it would mute without an observed start.
+                    autoMutePending = false;
+
                     if (previewRequested && previewIsPaused)
                     {
                         force = true;
@@ -157,35 +162,7 @@ internal sealed class TrayContext : ApplicationContext
 
                 if (Interlocked.Exchange(ref this.toggleRequested, 0) == 1)
                 {
-                    MuteState before = haveLast ? last : SafePoll(monitor);
-                    if (before != MuteState.NoCall && monitor.Toggle())
-                    {
-                        // Instant feedback: drive the LED and tray to the predicted
-                        // flipped state right away so a tap does not wait for a UIA
-                        // round-trip. The confirm poll below corrects it on the rare
-                        // chance Teams did not actually flip.
-                        MuteState predicted = before == MuteState.Muted ? MuteState.Live : MuteState.Muted;
-                        this.ApplyState(predicted);
-                        last = predicted;
-                        haveLast = true;
-
-                        for (int i = 0; i < 25 && this.running; i++)
-                        {
-                            MuteState current = SafePoll(monitor);
-                            if (current != MuteState.NoCall && current != before)
-                            {
-                                if (current != predicted)
-                                {
-                                    this.ApplyState(current);
-                                    last = current;
-                                }
-
-                                break;
-                            }
-
-                            this.pollWake.WaitOne(40);
-                        }
-                    }
+                    this.PerformToggle(monitor, ref last, ref haveLast);
                 }
 
                 // Only walk the Teams accessibility tree when Teams is actually
@@ -201,6 +178,14 @@ internal sealed class TrayContext : ApplicationContext
                 // says a call is up, hold the last in-call state across that miss
                 // instead of flashing the LED and tray to the not-in-call color.
                 MuteState state = CallStateResolver.Resolve(micActive, polled, last, haveLast);
+
+                // Arm or hold the auto-mute intent before the apply block overwrites
+                // 'last' and before wasPaused is reset, since both feed the decision.
+                // A true result always means the call is live and still owes a mute, so
+                // a transient toggle miss simply leaves it set to retry next poll.
+                autoMutePending = AutoMuteResolver.ArmOrHoldPending(
+                    this.config.AutoMuteOnMeetingStart, haveLast, wasPaused, last, state, autoMutePending);
+
                 if (previewRequested && !previewIsPaused && state == previewStateValue)
                 {
                     force = true;
@@ -214,6 +199,22 @@ internal sealed class TrayContext : ApplicationContext
                 }
 
                 wasPaused = false;
+
+                if (autoMutePending)
+                {
+                    // Flip the just-started live call to muted through the same proven
+                    // path a manual tap uses.
+                    this.PerformToggle(monitor, ref last, ref haveLast);
+
+                    // Clear the intent the instant the mute is confirmed, not on the
+                    // next poll, so a manual unmute during the upcoming poll wait is not
+                    // fought. A missed toggle leaves last == Live, so the intent holds
+                    // and retries next poll.
+                    if (last == MuteState.Muted)
+                    {
+                        autoMutePending = false;
+                    }
+                }
 
                 // In a call, poll fast for the UIA mute state. Idle, block until the
                 // registry watcher signals a call start or a menu action wakes the loop,
@@ -239,6 +240,40 @@ internal sealed class TrayContext : ApplicationContext
         catch (Exception)
         {
             return MuteState.NoCall;
+        }
+    }
+
+    private void PerformToggle(TeamsMonitor monitor, ref MuteState last, ref bool haveLast)
+    {
+        MuteState before = haveLast ? last : SafePoll(monitor);
+        if (before == MuteState.NoCall || !monitor.Toggle())
+        {
+            return;
+        }
+
+        // Instant feedback: drive the LED and tray to the predicted flipped state
+        // right away so the action does not wait for a UIA round-trip. The confirm
+        // poll below corrects it on the rare chance Teams did not actually flip.
+        MuteState predicted = before == MuteState.Muted ? MuteState.Live : MuteState.Muted;
+        this.ApplyState(predicted);
+        last = predicted;
+        haveLast = true;
+
+        for (int i = 0; i < 25 && this.running; i++)
+        {
+            MuteState current = SafePoll(monitor);
+            if (current != MuteState.NoCall && current != before)
+            {
+                if (current != predicted)
+                {
+                    this.ApplyState(current);
+                    last = current;
+                }
+
+                break;
+            }
+
+            this.pollWake.WaitOne(40);
         }
     }
 

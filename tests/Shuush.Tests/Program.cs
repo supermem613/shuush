@@ -12,12 +12,36 @@ internal static class Program
             Console.WriteLine("PASS SettingsDialogPersistsDisplayedNoCallColor");
             SettingsDialogOkPersistsNoCallColorAcrossReload();
             Console.WriteLine("PASS SettingsDialogOkPersistsNoCallColorAcrossReload");
+            SettingsDialogPersistsAutoMuteOnMeetingStart();
+            Console.WriteLine("PASS SettingsDialogPersistsAutoMuteOnMeetingStart");
+            AutoMutePersistsAcrossSaveAndLoad();
+            Console.WriteLine("PASS AutoMutePersistsAcrossSaveAndLoad");
             ActiveCallHoldsLiveAcrossTransientMissedPoll();
             Console.WriteLine("PASS ActiveCallHoldsLiveAcrossTransientMissedPoll");
             ActiveCallHoldsMutedAcrossTransientMissedPoll();
             Console.WriteLine("PASS ActiveCallHoldsMutedAcrossTransientMissedPoll");
             EndedCallReportsNoCall();
             Console.WriteLine("PASS EndedCallReportsNoCall");
+            AutoMuteFiresOnObservedMeetingStartWhenEnabled();
+            Console.WriteLine("PASS AutoMuteFiresOnObservedMeetingStartWhenEnabled");
+            AutoMuteSkipsWhenDisabled();
+            Console.WriteLine("PASS AutoMuteSkipsWhenDisabled");
+            AutoMuteSkipsWhenJoiningMuted();
+            Console.WriteLine("PASS AutoMuteSkipsWhenJoiningMuted");
+            AutoMuteSkipsManualUnmuteMidMeeting();
+            Console.WriteLine("PASS AutoMuteSkipsManualUnmuteMidMeeting");
+            AutoMuteSkipsWhenLaunchingIntoCall();
+            Console.WriteLine("PASS AutoMuteSkipsWhenLaunchingIntoCall");
+            AutoMuteSkipsRightAfterUnpause();
+            Console.WriteLine("PASS AutoMuteSkipsRightAfterUnpause");
+            AutoMuteRetriesAfterTransientToggleMiss();
+            Console.WriteLine("PASS AutoMuteRetriesAfterTransientToggleMiss");
+            AutoMuteClearsOnceMuted();
+            Console.WriteLine("PASS AutoMuteClearsOnceMuted");
+            AutoMuteClearsWhenCallEnds();
+            Console.WriteLine("PASS AutoMuteClearsWhenCallEnds");
+            AutoMuteDoesNotReArmAfterManualUnmute();
+            Console.WriteLine("PASS AutoMuteDoesNotReArmAfterManualUnmute");
             return 0;
         }
         catch (Exception ex)
@@ -57,6 +81,143 @@ internal static class Program
         }
     }
 
+    private static void AutoMuteFiresOnObservedMeetingStartWhenEnabled()
+    {
+        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: true, wasPaused: false, last: MuteState.NoCall, state: MuteState.Live);
+        if (!should)
+        {
+            throw new InvalidOperationException(
+                "An observed not-in-call -> live edge with auto-mute enabled must mute, but it did not.");
+        }
+    }
+
+    private static void AutoMuteSkipsWhenDisabled()
+    {
+        bool should = ShouldMuteAtMeetingStart(enabled: false, haveLast: true, wasPaused: false, last: MuteState.NoCall, state: MuteState.Live);
+        if (should)
+        {
+            throw new InvalidOperationException(
+                "Auto-mute must not fire when the setting is disabled.");
+        }
+    }
+
+    private static void AutoMuteSkipsWhenJoiningMuted()
+    {
+        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: true, wasPaused: false, last: MuteState.NoCall, state: MuteState.Muted);
+        if (should)
+        {
+            throw new InvalidOperationException(
+                "Auto-mute must not fire when the meeting is joined already muted.");
+        }
+    }
+
+    private static void AutoMuteSkipsManualUnmuteMidMeeting()
+    {
+        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Muted, state: MuteState.Live);
+        if (should)
+        {
+            throw new InvalidOperationException(
+                "Auto-mute must not re-fire when the user manually unmutes mid-meeting (muted -> live).");
+        }
+    }
+
+    private static void AutoMuteSkipsWhenLaunchingIntoCall()
+    {
+        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: false, wasPaused: false, last: MuteState.NoCall, state: MuteState.Live);
+        if (should)
+        {
+            throw new InvalidOperationException(
+                "Auto-mute must not fire when shuush launches into an already-running meeting (start not observed).");
+        }
+    }
+
+    private static void AutoMuteSkipsRightAfterUnpause()
+    {
+        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: true, wasPaused: true, last: MuteState.NoCall, state: MuteState.Live);
+        if (should)
+        {
+            throw new InvalidOperationException(
+                "Auto-mute must not fire on the first poll after unpause (start not continuously observed).");
+        }
+    }
+
+    private static bool ShouldMuteAtMeetingStart(bool enabled, bool haveLast, bool wasPaused, MuteState last, MuteState state)
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type resolverType = assembly.GetType("Shuush.AutoMuteResolver", throwOnError: true)!;
+        Type stateType = assembly.GetType("Shuush.MuteState", throwOnError: true)!;
+        object result = resolverType.GetMethod("ShouldMuteAtMeetingStart")!.Invoke(null, new object[]
+        {
+            enabled,
+            haveLast,
+            wasPaused,
+            Enum.ToObject(stateType, (int)last),
+            Enum.ToObject(stateType, (int)state),
+        })!;
+        return (bool)result;
+    }
+
+    private static void AutoMuteRetriesAfterTransientToggleMiss()
+    {
+        // First poll armed the intent and tried to mute but the toggle missed, so
+        // the applied state is still Live. The intent must survive to retry.
+        bool pending = ArmOrHoldPending(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Live, state: MuteState.Live, pending: true);
+        if (!pending)
+        {
+            throw new InvalidOperationException(
+                "A pending auto-mute must be held across a transient toggle miss while the call stays live.");
+        }
+    }
+
+    private static void AutoMuteClearsOnceMuted()
+    {
+        bool pending = ArmOrHoldPending(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Muted, state: MuteState.Muted, pending: true);
+        if (pending)
+        {
+            throw new InvalidOperationException(
+                "A pending auto-mute must clear once the call reads muted.");
+        }
+    }
+
+    private static void AutoMuteClearsWhenCallEnds()
+    {
+        bool pending = ArmOrHoldPending(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Live, state: MuteState.NoCall, pending: true);
+        if (pending)
+        {
+            throw new InvalidOperationException(
+                "A pending auto-mute must clear when the call ends.");
+        }
+    }
+
+    private static void AutoMuteDoesNotReArmAfterManualUnmute()
+    {
+        // The call was muted (auto-mute already done, intent cleared) and the user
+        // manually unmutes. Nothing armed it, so it must not fire again.
+        bool pending = ArmOrHoldPending(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Muted, state: MuteState.Live, pending: false);
+        if (pending)
+        {
+            throw new InvalidOperationException(
+                "Auto-mute must not re-arm after a manual unmute mid-meeting.");
+        }
+    }
+
+    private static bool ArmOrHoldPending(bool enabled, bool haveLast, bool wasPaused, MuteState last, MuteState state, bool pending)
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type resolverType = assembly.GetType("Shuush.AutoMuteResolver", throwOnError: true)!;
+        Type stateType = assembly.GetType("Shuush.MuteState", throwOnError: true)!;
+        object result = resolverType.GetMethod("ArmOrHoldPending")!.Invoke(null, new object[]
+        {
+            enabled,
+            haveLast,
+            wasPaused,
+            Enum.ToObject(stateType, (int)last),
+            Enum.ToObject(stateType, (int)state),
+            pending,
+        })!;
+        return (bool)result;
+    }
+
     private static MuteState ResolveCallState(bool micActive, MuteState polled, MuteState last, bool haveLast)
     {
         Assembly assembly = Assembly.Load("shuush");
@@ -77,6 +238,64 @@ internal static class Program
         NoCall,
         Live,
         Muted,
+    }
+
+    private static void SettingsDialogPersistsAutoMuteOnMeetingStart()
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type configType = assembly.GetType("Shuush.AppConfig", throwOnError: true)!;
+        Type formType = assembly.GetType("Shuush.SettingsForm", throwOnError: true)!;
+
+        object config = Activator.CreateInstance(configType)!;
+        configType.GetProperty("AutoMuteOnMeetingStart")!.SetValue(config, false);
+
+        using Form form = (Form)Activator.CreateInstance(formType)!;
+        formType.GetMethod("Initialize")!.Invoke(form, new[] { config });
+
+        CheckBox autoMuteInput = (CheckBox)formType
+            .GetField("autoMuteInput", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(form)!;
+
+        autoMuteInput.Checked = true;
+        object updated = formType.GetProperty("UpdatedConfig")!.GetValue(form)!;
+        bool saved = (bool)configType.GetProperty("AutoMuteOnMeetingStart")!.GetValue(updated)!;
+        if (!saved)
+        {
+            throw new InvalidOperationException("Expected AutoMuteOnMeetingStart to be true after checking the box.");
+        }
+    }
+
+    private static void AutoMutePersistsAcrossSaveAndLoad()
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type configType = assembly.GetType("Shuush.AppConfig", throwOnError: true)!;
+        string configPath = (string)configType.GetProperty("FilePath")!.GetValue(null)!;
+        string? originalJson = File.Exists(configPath) ? File.ReadAllText(configPath) : null;
+
+        try
+        {
+            object config = Activator.CreateInstance(configType)!;
+            configType.GetProperty("AutoMuteOnMeetingStart")!.SetValue(config, true);
+            configType.GetMethod("Save")!.Invoke(config, null);
+
+            object loaded = configType.GetMethod("Load")!.Invoke(null, null)!;
+            bool loadedValue = (bool)configType.GetProperty("AutoMuteOnMeetingStart")!.GetValue(loaded)!;
+            if (!loadedValue)
+            {
+                throw new InvalidOperationException("Expected AutoMuteOnMeetingStart to survive Save/Load, but it was false.");
+            }
+        }
+        finally
+        {
+            if (originalJson is null)
+            {
+                File.Delete(configPath);
+            }
+            else
+            {
+                File.WriteAllText(configPath, originalJson);
+            }
+        }
     }
 
     private static void SettingsDialogPersistsDisplayedNoCallColor()

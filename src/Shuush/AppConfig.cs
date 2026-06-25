@@ -36,6 +36,9 @@ internal sealed class AppConfig
     /// <summary>Whether shuush launches at sign-in (HKCU Run key).</summary>
     public bool StartWithWindows { get; set; }
 
+    /// <summary>Whether to mute the Teams microphone once at the start of each meeting.</summary>
+    public bool AutoMuteOnMeetingStart { get; set; }
+
     /// <summary>Absolute path of the config file.</summary>
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -108,6 +111,7 @@ internal sealed class AppConfig
         NoCallColor = this.NoCallColor,
         PausedColor = this.PausedColor,
         StartWithWindows = this.StartWithWindows,
+        AutoMuteOnMeetingStart = this.AutoMuteOnMeetingStart,
     };
 
     private void Normalize()

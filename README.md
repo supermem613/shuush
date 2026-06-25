@@ -67,7 +67,8 @@ dotnet build -c Release
 - **Toggle mute** - press the Teams mic button (enabled only while in a call).
 - **Pause** - stop detection and show the configured paused color.
 - **Start with Windows** - register/unregister an HKCU sign-in entry.
-- **Settings...** - poll intervals, mode colors, dim, tray-color mirroring.
+- **Settings...** - poll intervals, mode colors, auto-mute at meeting start, dim,
+  tray-color mirroring.
 - **Exit**.
 
 Quit the MuteMe vendor app (MuteMe-Client) first so the two don't fight over the
@@ -82,6 +83,7 @@ Settings persist to `%AppData%\shuush\config.json`:
 | Poll interval (in call) | 750 ms | How often to re-read mute state during a call |
 | Muted color / Live color | Red / Green | LED + tray colors from the MuteMe palette |
 | Not-in-call color / Paused color | Off / Off | LED + tray colors from the MuteMe palette |
+| Mute mic at the start of every meeting | off | Mute once when a call begins; leaves later manual unmutes alone |
 | Drive the MuteMe LED | on | Turn LED control off entirely |
 | Dim the LED | off | Apply the dim bit |
 | Tray icon color follows mute state | on | Off keeps a neutral tray icon |
@@ -89,6 +91,11 @@ Settings persist to `%AppData%\shuush\config.json`:
 
 Mode colors can be off or one of the seven bitmask colors: red, green, blue,
 yellow, cyan, purple, white.
+
+With **Mute mic at the start of every meeting** on, shuush mutes you once the
+moment a call goes live, so you never join hot. It acts only on a call it watched
+begin: it leaves you alone if you unmute later in the same call, if you join
+already muted, or if shuush starts while a call is already running.
 
 Changing a mode color in Settings previews only when that mode is currently
 active. Muted, live, not-in-call, and paused each preview only while that
@@ -103,6 +110,8 @@ OK saves the selected settings, Cancel restores the previous saved settings.
 | `TrayContext.cs` | Tray icon, flyout menu, poll thread, state -> color |
 | `TeamsMonitor.cs` | UI Automation: read and toggle the Teams mic button |
 | `MuteState.cs` | Mute-state enum: no call, live, muted |
+| `CallStateResolver.cs` | Holds in-call state across transient UI Automation misses |
+| `AutoMuteResolver.cs` | Decides whether to auto-mute at the start of a meeting |
 | `CallActivityProbe.cs` | Registry probe: is Teams using the microphone (in a call) |
 | `MicActivityWatcher.cs` | Registry-change watcher that wakes the poll loop when a call starts |
 | `MuteMeDevice.cs` | USB HID: LED output and button-tap input |
