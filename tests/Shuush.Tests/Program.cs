@@ -30,6 +30,8 @@ internal static class Program
             Console.WriteLine("PASS AutoMuteSkipsWhenJoiningMuted");
             AutoMuteSkipsManualUnmuteMidMeeting();
             Console.WriteLine("PASS AutoMuteSkipsManualUnmuteMidMeeting");
+            AutoMuteSkipsDelayedLiveAfterMicAlreadyActive();
+            Console.WriteLine("PASS AutoMuteSkipsDelayedLiveAfterMicAlreadyActive");
             AutoMuteSkipsWhenLaunchingIntoCall();
             Console.WriteLine("PASS AutoMuteSkipsWhenLaunchingIntoCall");
             AutoMuteSkipsRightAfterUnpause();
@@ -83,17 +85,17 @@ internal static class Program
 
     private static void AutoMuteFiresOnObservedMeetingStartWhenEnabled()
     {
-        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: true, wasPaused: false, last: MuteState.NoCall, state: MuteState.Live);
+        bool should = ShouldMuteAtMeetingStart(enabled: true, micBecameActive: true, wasPaused: false, state: MuteState.Live);
         if (!should)
         {
             throw new InvalidOperationException(
-                "An observed not-in-call -> live edge with auto-mute enabled must mute, but it did not.");
+                "An observed mic-active -> live edge with auto-mute enabled must mute, but it did not.");
         }
     }
 
     private static void AutoMuteSkipsWhenDisabled()
     {
-        bool should = ShouldMuteAtMeetingStart(enabled: false, haveLast: true, wasPaused: false, last: MuteState.NoCall, state: MuteState.Live);
+        bool should = ShouldMuteAtMeetingStart(enabled: false, micBecameActive: true, wasPaused: false, state: MuteState.Live);
         if (should)
         {
             throw new InvalidOperationException(
@@ -103,7 +105,7 @@ internal static class Program
 
     private static void AutoMuteSkipsWhenJoiningMuted()
     {
-        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: true, wasPaused: false, last: MuteState.NoCall, state: MuteState.Muted);
+        bool should = ShouldMuteAtMeetingStart(enabled: true, micBecameActive: true, wasPaused: false, state: MuteState.Muted);
         if (should)
         {
             throw new InvalidOperationException(
@@ -113,27 +115,37 @@ internal static class Program
 
     private static void AutoMuteSkipsManualUnmuteMidMeeting()
     {
-        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Muted, state: MuteState.Live);
+        bool should = ShouldMuteAtMeetingStart(enabled: true, micBecameActive: false, wasPaused: false, state: MuteState.Live);
         if (should)
         {
             throw new InvalidOperationException(
-                "Auto-mute must not re-fire when the user manually unmutes mid-meeting (muted -> live).");
+                "Auto-mute must not re-fire when the user manually unmutes mid-meeting.");
+        }
+    }
+
+    private static void AutoMuteSkipsDelayedLiveAfterMicAlreadyActive()
+    {
+        bool should = ShouldMuteAtMeetingStart(enabled: true, micBecameActive: false, wasPaused: false, state: MuteState.Live);
+        if (should)
+        {
+            throw new InvalidOperationException(
+                "Auto-mute must not fire when the first live UI state appears after the mic was already active.");
         }
     }
 
     private static void AutoMuteSkipsWhenLaunchingIntoCall()
     {
-        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: false, wasPaused: false, last: MuteState.NoCall, state: MuteState.Live);
+        bool should = ShouldMuteAtMeetingStart(enabled: true, micBecameActive: false, wasPaused: false, state: MuteState.Live);
         if (should)
         {
             throw new InvalidOperationException(
-                "Auto-mute must not fire when shuush launches into an already-running meeting (start not observed).");
+                "Auto-mute must not fire when shuush launches into an already-running meeting.");
         }
     }
 
     private static void AutoMuteSkipsRightAfterUnpause()
     {
-        bool should = ShouldMuteAtMeetingStart(enabled: true, haveLast: true, wasPaused: true, last: MuteState.NoCall, state: MuteState.Live);
+        bool should = ShouldMuteAtMeetingStart(enabled: true, micBecameActive: true, wasPaused: true, state: MuteState.Live);
         if (should)
         {
             throw new InvalidOperationException(
@@ -141,7 +153,7 @@ internal static class Program
         }
     }
 
-    private static bool ShouldMuteAtMeetingStart(bool enabled, bool haveLast, bool wasPaused, MuteState last, MuteState state)
+    private static bool ShouldMuteAtMeetingStart(bool enabled, bool micBecameActive, bool wasPaused, MuteState state)
     {
         Assembly assembly = Assembly.Load("shuush");
         Type resolverType = assembly.GetType("Shuush.AutoMuteResolver", throwOnError: true)!;
@@ -149,9 +161,8 @@ internal static class Program
         object result = resolverType.GetMethod("ShouldMuteAtMeetingStart")!.Invoke(null, new object[]
         {
             enabled,
-            haveLast,
+            micBecameActive,
             wasPaused,
-            Enum.ToObject(stateType, (int)last),
             Enum.ToObject(stateType, (int)state),
         })!;
         return (bool)result;
@@ -161,7 +172,7 @@ internal static class Program
     {
         // First poll armed the intent and tried to mute but the toggle missed, so
         // the applied state is still Live. The intent must survive to retry.
-        bool pending = ArmOrHoldPending(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Live, state: MuteState.Live, pending: true);
+        bool pending = ArmOrHoldPending(enabled: true, micBecameActive: false, wasPaused: false, state: MuteState.Live, pending: true);
         if (!pending)
         {
             throw new InvalidOperationException(
@@ -171,7 +182,7 @@ internal static class Program
 
     private static void AutoMuteClearsOnceMuted()
     {
-        bool pending = ArmOrHoldPending(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Muted, state: MuteState.Muted, pending: true);
+        bool pending = ArmOrHoldPending(enabled: true, micBecameActive: false, wasPaused: false, state: MuteState.Muted, pending: true);
         if (pending)
         {
             throw new InvalidOperationException(
@@ -181,7 +192,7 @@ internal static class Program
 
     private static void AutoMuteClearsWhenCallEnds()
     {
-        bool pending = ArmOrHoldPending(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Live, state: MuteState.NoCall, pending: true);
+        bool pending = ArmOrHoldPending(enabled: true, micBecameActive: false, wasPaused: false, state: MuteState.NoCall, pending: true);
         if (pending)
         {
             throw new InvalidOperationException(
@@ -193,7 +204,7 @@ internal static class Program
     {
         // The call was muted (auto-mute already done, intent cleared) and the user
         // manually unmutes. Nothing armed it, so it must not fire again.
-        bool pending = ArmOrHoldPending(enabled: true, haveLast: true, wasPaused: false, last: MuteState.Muted, state: MuteState.Live, pending: false);
+        bool pending = ArmOrHoldPending(enabled: true, micBecameActive: false, wasPaused: false, state: MuteState.Live, pending: false);
         if (pending)
         {
             throw new InvalidOperationException(
@@ -201,7 +212,7 @@ internal static class Program
         }
     }
 
-    private static bool ArmOrHoldPending(bool enabled, bool haveLast, bool wasPaused, MuteState last, MuteState state, bool pending)
+    private static bool ArmOrHoldPending(bool enabled, bool micBecameActive, bool wasPaused, MuteState state, bool pending)
     {
         Assembly assembly = Assembly.Load("shuush");
         Type resolverType = assembly.GetType("Shuush.AutoMuteResolver", throwOnError: true)!;
@@ -209,9 +220,8 @@ internal static class Program
         object result = resolverType.GetMethod("ArmOrHoldPending")!.Invoke(null, new object[]
         {
             enabled,
-            haveLast,
+            micBecameActive,
             wasPaused,
-            Enum.ToObject(stateType, (int)last),
             Enum.ToObject(stateType, (int)state),
             pending,
         })!;

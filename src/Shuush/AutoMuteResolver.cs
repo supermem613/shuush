@@ -3,15 +3,15 @@ namespace Shuush;
 /// <summary>
 /// Decides whether to auto-mute the microphone at the start of a meeting.
 ///
-/// A meeting start is an observed not-in-call -> live edge: the previously
-/// applied state was <see cref="MuteState.NoCall"/> and this poll resolved to
+/// A meeting start is an observed microphone-activity edge: the registry gate
+/// moved from inactive to active and this same poll resolved to
 /// <see cref="MuteState.Live"/>. Muting only on that edge, and only while live,
 /// is what makes the action fire once per meeting instead of every poll, and
 /// never fight a manual unmute later in the same call.
 ///
 /// Two starts are deliberately ignored because shuush did not continuously
 /// observe them, so forcing mute would surprise the user: launching straight
-/// into an already-running call (no prior applied state) and the first poll
+/// into an already-running call (no prior mic-active state) and the first poll
 /// after unpausing (detection had been stopped).
 ///
 /// The intent is sticky: <see cref="ArmOrHoldPending"/> holds it across transient
@@ -23,17 +23,16 @@ internal static class AutoMuteResolver
     /// <summary>
     /// Returns true when the opt-in auto-mute should flip a just-started meeting
     /// to muted. <paramref name="enabled"/> is the user setting,
-    /// <paramref name="haveLast"/> and <paramref name="last"/> describe the
-    /// previously applied state, <paramref name="wasPaused"/> is true on the first
-    /// poll after unpausing, and <paramref name="state"/> is the state resolved for
-    /// this poll.
+    /// <paramref name="micBecameActive"/> is true only on the observed registry
+    /// activity start edge, <paramref name="wasPaused"/> is true on the first poll
+    /// after unpausing, and <paramref name="state"/> is the state resolved for this
+    /// poll.
     /// </summary>
-    public static bool ShouldMuteAtMeetingStart(bool enabled, bool haveLast, bool wasPaused, MuteState last, MuteState state)
+    public static bool ShouldMuteAtMeetingStart(bool enabled, bool micBecameActive, bool wasPaused, MuteState state)
     {
         return enabled
-            && haveLast
+            && micBecameActive
             && !wasPaused
-            && last == MuteState.NoCall
             && state == MuteState.Live;
     }
 
@@ -47,9 +46,9 @@ internal static class AutoMuteResolver
     /// owing a mute," so the caller can toggle whenever this returns true and let a
     /// confirmed mute clear the intent on the next poll.
     /// </summary>
-    public static bool ArmOrHoldPending(bool enabled, bool haveLast, bool wasPaused, MuteState last, MuteState state, bool pending)
+    public static bool ArmOrHoldPending(bool enabled, bool micBecameActive, bool wasPaused, MuteState state, bool pending)
     {
-        bool arm = ShouldMuteAtMeetingStart(enabled, haveLast, wasPaused, last, state);
+        bool arm = ShouldMuteAtMeetingStart(enabled, micBecameActive, wasPaused, state);
         bool held = pending && state == MuteState.Live;
         return arm || held;
     }

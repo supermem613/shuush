@@ -114,6 +114,8 @@ internal sealed class TrayContext : ApplicationContext
             bool wasPaused = false;
             bool wasConnected = false;
             bool autoMutePending = false;
+            bool haveMicActive = false;
+            bool wasMicActive = false;
 
             while (this.running)
             {
@@ -171,6 +173,7 @@ internal sealed class TrayContext : ApplicationContext
                 // the registry watcher wake us the moment a call begins.
                 bool micActive = CallActivityProbe.IsTeamsMicActive();
                 MuteState polled = micActive ? SafePoll(monitor) : MuteState.NoCall;
+                bool micBecameActive = haveMicActive && !wasMicActive && micActive;
 
                 // A single UIA poll returns NoCall whenever the WebView2 toolbar is
                 // mid re-render and the microphone button is momentarily unfindable.
@@ -179,12 +182,12 @@ internal sealed class TrayContext : ApplicationContext
                 // instead of flashing the LED and tray to the not-in-call color.
                 MuteState state = CallStateResolver.Resolve(micActive, polled, last, haveLast);
 
-                // Arm or hold the auto-mute intent before the apply block overwrites
-                // 'last' and before wasPaused is reset, since both feed the decision.
+                // Arm or hold the auto-mute intent before wasPaused is reset, since
+                // the first unpaused poll must not be treated as a meeting start.
                 // A true result always means the call is live and still owes a mute, so
                 // a transient toggle miss simply leaves it set to retry next poll.
                 autoMutePending = AutoMuteResolver.ArmOrHoldPending(
-                    this.config.AutoMuteOnMeetingStart, haveLast, wasPaused, last, state, autoMutePending);
+                    this.config.AutoMuteOnMeetingStart, micBecameActive, wasPaused, state, autoMutePending);
 
                 if (previewRequested && !previewIsPaused && state == previewStateValue)
                 {
@@ -199,6 +202,8 @@ internal sealed class TrayContext : ApplicationContext
                 }
 
                 wasPaused = false;
+                wasMicActive = micActive;
+                haveMicActive = true;
 
                 if (autoMutePending)
                 {

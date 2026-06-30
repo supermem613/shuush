@@ -10,7 +10,7 @@
     <RootNamespace>Shuush</RootNamespace>
     <AssemblyName>shuush</AssemblyName>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Product>shuush</Product>
     <Description>System-tray app that mirrors Microsoft Teams mute state to the MuteMe USB button.</Description>
     <Authors>Marcus Markiewicz</Authors>

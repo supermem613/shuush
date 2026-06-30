@@ -92,10 +92,11 @@ Settings persist to `%AppData%\shuush\config.json`:
 Mode colors can be off or one of the seven bitmask colors: red, green, blue,
 yellow, cyan, purple, white.
 
-With **Mute mic at the start of every meeting** on, shuush mutes you once the
-moment a call goes live, so you never join hot. It acts only on a call it watched
-begin: it leaves you alone if you unmute later in the same call, if you join
-already muted, or if shuush starts while a call is already running.
+With **Mute mic at the start of every meeting** on, shuush mutes you when it
+sees the microphone become active and the Teams mic button is live on that same
+poll, so you never join hot. It leaves you alone if you unmute later in the same
+call, if you join already muted, if the first live Teams UI state appears after
+the call is already active, or if shuush starts while a call is already running.
 
 Changing a mode color in Settings previews only when that mode is currently
 active. Muted, live, not-in-call, and paused each preview only while that
