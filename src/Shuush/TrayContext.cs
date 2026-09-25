@@ -167,12 +167,11 @@ internal sealed class TrayContext : ApplicationContext
                     this.PerformToggle(monitor, ref last, ref haveLast);
                 }
 
-                // Only walk the Teams accessibility tree when Teams is actually
-                // capturing the microphone (in a call). When it is not, a full UIA scan
-                // would burn CPU only to return NoCall, so report NoCall directly and let
-                // the registry watcher wake us the moment a call begins.
+                // ConsentStore is a cheap in-call hint, not a hard skip. A live meeting
+                // can keep LastUsedTimeStop non-zero, so always walk UIA and let
+                // SelectPolled keep a Live or Muted toolbar reading.
                 bool micActive = CallActivityProbe.IsTeamsMicActive();
-                MuteState polled = micActive ? SafePoll(monitor) : MuteState.NoCall;
+                MuteState polled = CallStateResolver.SelectPolled(micActive, SafePoll(monitor));
                 bool micBecameActive = haveMicActive && !wasMicActive && micActive;
 
                 // A single UIA poll returns NoCall whenever the WebView2 toolbar is
@@ -221,10 +220,9 @@ internal sealed class TrayContext : ApplicationContext
                     }
                 }
 
-                // In a call, poll fast for the UIA mute state. Idle, block until the
-                // registry watcher signals a call start or a menu action wakes the loop,
-                // so idle costs zero CPU with no timed wakeups.
-                int interval = micActive ? this.config.PollIntervalMs : Timeout.Infinite;
+                // Keep the configured poll interval even when ConsentStore is idle so a
+                // missed registry gate still re-scans UIA. Infinite wait never recovers.
+                int interval = CallStateResolver.NextWaitMs(micActive, this.config.PollIntervalMs);
                 this.pollWake.WaitOne(interval);
             }
         }

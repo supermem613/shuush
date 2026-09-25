@@ -22,6 +22,10 @@ internal static class Program
             Console.WriteLine("PASS ActiveCallHoldsMutedAcrossTransientMissedPoll");
             EndedCallReportsNoCall();
             Console.WriteLine("PASS EndedCallReportsNoCall");
+            RegistryIdleKeepsLiveUiPoll();
+            Console.WriteLine("PASS RegistryIdleKeepsLiveUiPoll");
+            RegistryIdleKeepsFinitePollWait();
+            Console.WriteLine("PASS RegistryIdleKeepsFinitePollWait");
             AutoMuteFiresOnObservedMeetingStartWhenEnabled();
             Console.WriteLine("PASS AutoMuteFiresOnObservedMeetingStartWhenEnabled");
             AutoMuteSkipsWhenDisabled();
@@ -80,6 +84,34 @@ internal static class Program
         {
             throw new InvalidOperationException(
                 $"When the mic gate reports the call ended, the state must be NoCall, but resolved to {resolved}.");
+        }
+    }
+
+    private static void RegistryIdleKeepsLiveUiPoll()
+    {
+        MuteState selected = SelectPolled(micActive: false, uia: MuteState.Live);
+        if (selected != MuteState.Live)
+        {
+            throw new InvalidOperationException(
+                $"A Live Teams toolbar poll must stay in-call when the mic registry is idle, but selected {selected}.");
+        }
+
+        MuteState resolved = ResolveCallState(micActive: false, polled: selected, last: MuteState.NoCall, haveLast: true);
+        if (resolved != MuteState.Live)
+        {
+            throw new InvalidOperationException(
+                $"A Live Teams toolbar poll must apply Live when the mic registry is idle, but resolved to {resolved}.");
+        }
+    }
+
+    private static void RegistryIdleKeepsFinitePollWait()
+    {
+        const int pollIntervalMs = 750;
+        int waitMs = NextWaitMs(micActive: false, pollIntervalMs);
+        if (waitMs != pollIntervalMs)
+        {
+            throw new InvalidOperationException(
+                $"Idle poll wait must stay on the configured interval {pollIntervalMs} ms so a missed ConsentStore still re-scans UIA, but was {waitMs}.");
         }
     }
 
@@ -241,6 +273,31 @@ internal static class Program
             haveLast,
         })!;
         return (MuteState)(int)result;
+    }
+
+    private static MuteState SelectPolled(bool micActive, MuteState uia)
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type resolverType = assembly.GetType("Shuush.CallStateResolver", throwOnError: true)!;
+        Type stateType = assembly.GetType("Shuush.MuteState", throwOnError: true)!;
+        object result = resolverType.GetMethod("SelectPolled")!.Invoke(null, new object[]
+        {
+            micActive,
+            Enum.ToObject(stateType, (int)uia),
+        })!;
+        return (MuteState)(int)result;
+    }
+
+    private static int NextWaitMs(bool micActive, int pollIntervalMs)
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type resolverType = assembly.GetType("Shuush.CallStateResolver", throwOnError: true)!;
+        object result = resolverType.GetMethod("NextWaitMs")!.Invoke(null, new object[]
+        {
+            micActive,
+            pollIntervalMs,
+        })!;
+        return (int)result;
     }
 
     private enum MuteState
