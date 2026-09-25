@@ -58,8 +58,55 @@ LED, and marshals tray-icon updates to the UI thread.
 ```pwsh
 git clone https://github.com/supermem613/shuush.git
 cd shuush
+dotnet run --project .\tests\Shuush.Tests\Shuush.Tests.csproj -c Release
 dotnet build -c Release
 .\src\Shuush\bin\Release\net9.0-windows\shuush.exe
+```
+
+## Install and start with Windows
+
+The following PowerShell commands create a self-contained, single-file
+installation under your user profile, register that installed executable for
+sign-in, and start it now. No administrator rights or separate .NET runtime are
+required.
+
+Exit a running copy of `shuush` before updating the installation.
+
+```pwsh
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\shuush'
+$exe = Join-Path $installDir 'shuush.exe'
+
+dotnet run --project .\tests\Shuush.Tests\Shuush.Tests.csproj -c Release
+dotnet publish .\src\Shuush\Shuush.csproj `
+  -c Release `
+  -r win-x64 `
+  --self-contained true `
+  -p:PublishSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:DebugType=None `
+  -o $installDir
+
+New-ItemProperty `
+  -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+  -Name 'shuush' `
+  -PropertyType String `
+  -Value "`"$exe`"" `
+  -Force
+
+Start-Process $exe
+```
+
+Windows will now start `shuush` when you sign in. The **Start with Windows**
+tray-menu item will be checked because it reads the same per-user registry
+entry. You can clear that item to disable automatic startup.
+
+Verify the installed executable and startup entry:
+
+```pwsh
+Get-Process shuush | Select-Object Id, Path
+Get-ItemProperty `
+  -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+  -Name 'shuush'
 ```
 
 `shuush` runs in the system tray. Right-click the tray icon for the menu:
