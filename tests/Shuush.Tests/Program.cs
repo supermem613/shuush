@@ -8,6 +8,8 @@ internal static class Program
     {
         try
         {
+            WindowChangesWakeDetectionOnTheUiThread();
+            Console.WriteLine("PASS WindowChangesWakeDetectionOnTheUiThread");
             SettingsDialogPersistsDisplayedNoCallColor();
             Console.WriteLine("PASS SettingsDialogPersistsDisplayedNoCallColor");
             SettingsDialogOkPersistsNoCallColorAcrossReload();
@@ -52,6 +54,54 @@ internal static class Program
             return 1;
         }
     }
+
+    private static void WindowChangesWakeDetectionOnTheUiThread()
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type watcherType = assembly.GetType("Shuush.TeamsWindowWatcher", throwOnError: true)!;
+        Type configType = assembly.GetType("Shuush.AppConfig", throwOnError: true)!;
+        object config = Activator.CreateInstance(configType)!;
+        int pollInterval = (int)configType.GetProperty("PollIntervalMs")!.GetValue(config)!;
+        int uiThread = Environment.CurrentManagedThreadId;
+        int callbackThread = 0;
+        int changes = 0;
+        Action onChanged = () =>
+        {
+            callbackThread = Environment.CurrentManagedThreadId;
+            changes++;
+        };
+        Func<int, bool> ownsWindow = processId => processId == Environment.ProcessId;
+        using IDisposable watcher = (IDisposable)Activator.CreateInstance(watcherType, onChanged, ownsWindow)!;
+        using Form window = new() { Text = "Meeting window fixture", ShowInTaskbar = false };
+        window.Show();
+        WaitForChange(0);
+        int afterShow = changes;
+        window.Text = "Meeting toolbar ready";
+        WaitForChange(afterShow);
+        int afterRename = changes;
+        // EVENT_OBJECT_NAMECHANGE on OBJID_CLIENT represents a late toolbar update.
+        NotifyWinEvent(0x800C, window.Handle, -4, 1);
+        WaitForChange(afterRename);
+
+        void WaitForChange(int previous)
+        {
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            while (changes == previous && elapsed.ElapsedMilliseconds < pollInterval)
+            {
+                Application.DoEvents();
+            }
+
+            if (changes <= previous || callbackThread != uiThread)
+            {
+                throw new InvalidOperationException(
+                    $"Expected a window change on UI thread {uiThread} within one poll interval, " +
+                    $"but changes={changes}, previous={previous}, callbackThread={callbackThread}.");
+            }
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern void NotifyWinEvent(uint eventType, IntPtr window, int objectId, int childId);
 
     private static void ActiveCallHoldsLiveAcrossTransientMissedPoll()
     {

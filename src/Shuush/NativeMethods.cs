@@ -5,10 +5,35 @@ namespace Shuush;
 
 /// <summary>
 /// Win32 entry points used for tray-icon resource management and registry-change
-/// notifications.
+/// notifications and Teams window events.
 /// </summary>
 internal static class NativeMethods
 {
+    internal enum WinEvent : uint
+    {
+        Foreground = 0x0003,
+        ObjectShow = 0x8002,
+        ObjectHide = 0x8003,
+        ObjectReorder = 0x8004,
+        ObjectNameChange = 0x800C,
+    }
+
+    internal delegate void WinEventCallback(
+        IntPtr hook, WinEvent eventType, IntPtr window, int objectId, int childId,
+        uint threadId, uint eventTime);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr SetWinEventHook(
+        WinEvent eventMin, WinEvent eventMax, IntPtr module, WinEventCallback callback,
+        uint processId, uint threadId, uint flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWinEvent(IntPtr hook);
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
     /// <summary>
     /// Releases the icon handle produced by <see cref="System.Drawing.Bitmap.GetHicon"/>.
     /// Each GetHicon call allocates a user object; without DestroyIcon the app leaks

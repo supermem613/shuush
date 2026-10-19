@@ -32,6 +32,7 @@ internal sealed class TrayContext : ApplicationContext
     private volatile AppConfig config;
     private SynchronizationContext uiContext = null!;
     private Thread? pollThread;
+    private TeamsWindowWatcher? windowWatcher;
     private volatile bool running;
     private volatile bool paused;
     private int previewActive;
@@ -88,6 +89,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         this.bootstrap.Stop();
         this.uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        this.windowWatcher = new TeamsWindowWatcher(() => this.pollWake.Set());
         this.running = true;
         this.pollThread = new Thread(this.PollLoop)
         {
@@ -167,13 +169,14 @@ internal sealed class TrayContext : ApplicationContext
                     this.PerformToggle(monitor, ref last, ref haveLast);
                 }
 
-                // Only walk the Teams accessibility tree when Teams is actually
-                // capturing the microphone (in a call). When it is not, a full UIA scan
-                // would burn CPU only to return NoCall, so report NoCall directly and let
-                // the registry watcher wake us the moment a call begins.
+                // Microphone history can stay inactive during a real meeting. A
+                // negative hint must not suppress the authoritative UIA read.
                 bool micActive = CallActivityProbe.IsTeamsMicActive();
-                MuteState polled = micActive ? SafePoll(monitor) : MuteState.NoCall;
-                bool micBecameActive = haveMicActive && !wasMicActive && micActive;
+                MuteState polled = SafePoll(monitor);
+                // A late microphone acquisition in a UIA-detected call is not
+                // another meeting start and must not undo a manual unmute.
+                bool micBecameActive = haveMicActive && !wasMicActive && micActive
+                    && (!haveLast || last == MuteState.NoCall);
 
                 // A single UIA poll returns NoCall whenever the WebView2 toolbar is
                 // mid re-render and the microphone button is momentarily unfindable.
@@ -221,10 +224,11 @@ internal sealed class TrayContext : ApplicationContext
                     }
                 }
 
-                // In a call, poll fast for the UIA mute state. Idle, block until the
-                // registry watcher signals a call start or a menu action wakes the loop,
-                // so idle costs zero CPU with no timed wakeups.
-                int interval = micActive ? this.config.PollIntervalMs : Timeout.Infinite;
+                // UIA-detected calls keep polling even without microphone activity.
+                // Idle has no timer: Teams window events and registry changes wake us.
+                int interval = micActive || state != MuteState.NoCall
+                    ? this.config.PollIntervalMs
+                    : Timeout.Infinite;
                 this.pollWake.WaitOne(interval);
             }
         }
@@ -437,6 +441,7 @@ internal sealed class TrayContext : ApplicationContext
         if (!this.disposed && disposing)
         {
             this.disposed = true;
+            this.windowWatcher?.Dispose();
             this.running = false;
             this.pollWake.Set();
 
