@@ -30,4 +30,25 @@ internal static class CallStateResolver
 
         return transientMiss ? last : polled;
     }
+
+    /// <summary>
+    /// Chooses the UIA result that <see cref="Resolve"/> will see. The ConsentStore
+    /// mic gate is an optimization, not the source of truth: a Live or Muted toolbar
+    /// reading must not be replaced with NoCall when the registry is idle.
+    /// </summary>
+    public static MuteState SelectPolled(bool micActive, MuteState uia)
+    {
+        _ = micActive;
+        return uia;
+    }
+
+    /// <summary>
+    /// Chooses the poll-loop wait. Idle must stay on the configured poll interval so
+    /// a missed ConsentStore still re-scans UIA. Infinite sleep never recovers.
+    /// </summary>
+    public static int NextWaitMs(bool micActive, int pollIntervalMs)
+    {
+        _ = micActive;
+        return pollIntervalMs;
+    }
 }
