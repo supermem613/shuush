@@ -42,6 +42,13 @@ are not in a call the poll loop blocks on these events instead of a timer.
 Either watcher wakes detection, which reads UI Automation even when microphone
 history says inactive. A detected call keeps polling until the call ends.
 
+The window watcher uses shell window-creation notifications and foreground
+events to find Teams processes. It subscribes to show, hide, reorder, and name
+events only for those processes, with exact native event types so unrelated events do not enter its
+managed callback. It queries each window owner's image directly instead of
+enumerating system-wide process information for each callback. The opt-in
+`Shuush-Detection` EventSource reports native callback deliveries for .NET tracing.
+
 A background thread owns all UI Automation work and the poll loop, drives the
 LED, and marshals tray-icon updates to the UI thread.
 
@@ -164,6 +171,7 @@ OK saves the selected settings, Cancel restores the previous saved settings.
 | `CallActivityProbe.cs` | Positive microphone-activity hint, not proof of call absence |
 | `MicActivityWatcher.cs` | Registry-change watcher that wakes the poll loop when a call starts |
 | `TeamsWindowWatcher.cs` | Event-driven detection when Teams windows or accessibility controls change |
+| `DetectionEvents.cs` | Opt-in native callback telemetry through .NET EventSource |
 | `MuteMeDevice.cs` | USB HID: LED output and button-tap input |
 | `TrayIconRenderer.cs` | Colored-dot tray icon rendering |
 | `LedPalette.cs` | MuteMe color palette -> HID command and tray color |

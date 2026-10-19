@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace Shuush;
@@ -9,6 +10,30 @@ namespace Shuush;
 /// </summary>
 internal static class NativeMethods
 {
+    internal const uint ProcessQueryLimitedInformation = 0x1000;
+    internal const int ErrorInsufficientBuffer = 122;
+    internal const int ShellWindowCreated = 1;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern uint RegisterWindowMessage(string message);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RegisterShellHookWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeregisterShellHookWindow(IntPtr window);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern SafeProcessHandle OpenProcess(
+        uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool QueryFullProcessImageName(
+        SafeProcessHandle process, uint flags, StringBuilder imageName, ref int size);
+
     internal enum WinEvent : uint
     {
         Foreground = 0x0003,
