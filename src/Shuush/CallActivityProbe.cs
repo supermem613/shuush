@@ -8,13 +8,10 @@ namespace Shuush;
 /// Windows records per-app capture state under the CapabilityAccessManager
 /// ConsentStore: while an app is capturing the microphone, LastUsedTimeStop is 0;
 /// once it stops, that value becomes a real FILETIME. Teams holds the mic open
-/// for the whole call even while muted (Teams mutes at the app level, not by
-/// releasing the device), so a zero stop time is a reliable in-call signal that
-/// costs a registry read instead of a full UI Automation tree walk.
+/// for many calls even while muted, but some meetings leave this history stale.
 ///
-/// This is an optimization gate, not the source of truth: the actual mute state
-/// still comes from UI Automation. Reads that fail are treated as "active" so
-/// detection never silently stops.
+/// This is a positive activity hint, not proof of call absence. UI Automation
+/// remains authoritative. Reads that fail are treated as "active".
 /// </summary>
 internal static class CallActivityProbe
 {

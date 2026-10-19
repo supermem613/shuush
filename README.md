@@ -36,10 +36,18 @@ Two halves, both local to your machine, bridged by a tray app:
 
 Windows records which apps are using the microphone under the
 CapabilityAccessManager consent store in the registry. `shuush` watches that key
-with `RegNotifyChangeKeyValue`, so while you are not in a call the poll loop
-blocks on the change event instead of polling and idle CPU is effectively zero.
-The moment Teams takes the microphone the watcher wakes the loop, which then
-re-reads the UI Automation state on a short cadence until the call ends.
+with `RegNotifyChangeKeyValue`. It also watches Teams window and accessibility
+changes, because some meetings do not update the microphone history. While you
+are not in a call the poll loop blocks on these events instead of a timer.
+Either watcher wakes detection, which reads UI Automation even when microphone
+history says inactive. A detected call keeps polling until the call ends.
+
+The window watcher uses shell window-creation notifications and foreground
+events to find Teams processes. It subscribes to show, hide, reorder, and name
+events only for those processes, with exact native event types so unrelated events do not enter its
+managed callback. It queries each window owner's image directly instead of
+enumerating system-wide process information for each callback. The opt-in
+`Shuush-Detection` EventSource reports native callback deliveries for .NET tracing.
 
 A background thread owns all UI Automation work and the poll loop, drives the
 LED, and marshals tray-icon updates to the UI thread.
@@ -160,15 +168,17 @@ OK saves the selected settings, Cancel restores the previous saved settings.
 | `MuteState.cs` | Mute-state enum: no call, live, muted |
 | `CallStateResolver.cs` | Holds in-call state across transient UI Automation misses |
 | `AutoMuteResolver.cs` | Decides whether to auto-mute at the start of a meeting |
-| `CallActivityProbe.cs` | Registry probe: is Teams using the microphone (in a call) |
+| `CallActivityProbe.cs` | Positive microphone-activity hint, not proof of call absence |
 | `MicActivityWatcher.cs` | Registry-change watcher that wakes the poll loop when a call starts |
+| `TeamsWindowWatcher.cs` | Event-driven detection when Teams windows or accessibility controls change |
+| `DetectionEvents.cs` | Opt-in native callback telemetry through .NET EventSource |
 | `MuteMeDevice.cs` | USB HID: LED output and button-tap input |
 | `TrayIconRenderer.cs` | Colored-dot tray icon rendering |
 | `LedPalette.cs` | MuteMe color palette -> HID command and tray color |
 | `AppConfig.cs` | Settings load/save |
 | `StartupManager.cs` | Start-with-Windows registration |
 | `SettingsForm.cs` | Settings dialog |
-| `NativeMethods.cs` | P/Invoke declarations for registry change notifications |
+| `NativeMethods.cs` | P/Invoke declarations for registry and window-change notifications |
 
 ## License
 

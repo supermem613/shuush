@@ -1,13 +1,47 @@
 using System.Reflection;
+using System.Diagnostics.Tracing;
 using System.Windows.Forms;
 
 internal static class Program
 {
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args is ["--emit-window-name"] or ["--show-window-name"])
+        {
+            bool show = args[0] == "--show-window-name";
+            using Form window = new BackgroundWindow { ShowInTaskbar = show };
+            if (show)
+            {
+                window.Show();
+            }
+            Console.WriteLine(window.Handle.ToInt64());
+            if (show)
+            {
+                Console.WriteLine("shown");
+                if (Console.ReadLine() != "emit")
+                {
+                    return 0;
+                }
+            }
+            else
+            {
+                NotifyWinEvent(0x8002, window.Handle, -4, 42);
+            }
+            NotifyWinEvent(0x800C, window.Handle, -4, 42);
+            Console.WriteLine("sent");
+            Console.ReadLine();
+            return 0;
+        }
+
         try
         {
+            NativeHookDeliversOnlySubscribedWindowChanges();
+            Console.WriteLine("PASS NativeHookDeliversOnlySubscribedWindowChanges");
+            WindowChangesWakeDetectionOnTheUiThread();
+            Console.WriteLine("PASS WindowChangesWakeDetectionOnTheUiThread");
+            NewProcessWindowChangesWakeDetection();
+            Console.WriteLine("PASS NewProcessWindowChangesWakeDetection");
             SettingsDialogPersistsDisplayedNoCallColor();
             Console.WriteLine("PASS SettingsDialogPersistsDisplayedNoCallColor");
             SettingsDialogOkPersistsNoCallColorAcrossReload();
@@ -52,6 +86,198 @@ internal static class Program
             return 1;
         }
     }
+
+    private sealed class BackgroundWindow : Form
+    {
+        protected override bool ShowWithoutActivation => true;
+    }
+
+    private static void NewProcessWindowChangesWakeDetection()
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type watcherType = assembly.GetType("Shuush.TeamsWindowWatcher", throwOnError: true)!;
+        Type configType = assembly.GetType("Shuush.AppConfig", throwOnError: true)!;
+        int pollInterval = (int)configType.GetProperty("PollIntervalMs")!.GetValue(Activator.CreateInstance(configType))!;
+        int targetProcess = 0;
+        int changes = 0;
+        int callbackThread = 0;
+        int uiThread = Environment.CurrentManagedThreadId;
+        Action onChanged = () => { changes++; callbackThread = Environment.CurrentManagedThreadId; };
+        Func<int, bool> ownsWindow = processId => processId == targetProcess;
+        using IDisposable watcher = (IDisposable)Activator.CreateInstance(watcherType, onChanged, ownsWindow)!;
+        using var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!)
+        {
+            ArgumentList = { "--show-window-name" },
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+        })!;
+        targetProcess = child.Id;
+        try
+        {
+            using var events = new WindowEventListener { Window = long.Parse(child.StandardOutput.ReadLine()!) };
+            if (child.StandardOutput.ReadLine() != "shown")
+            {
+                throw new InvalidOperationException("The new process did not show its window.");
+            }
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            while (changes == 0 && elapsed.ElapsedMilliseconds < pollInterval)
+            {
+                Application.DoEvents();
+            }
+            if (changes == 0)
+            {
+                throw new InvalidOperationException("The new process window did not wake detection.");
+            }
+
+            int beforeName = changes;
+            child.StandardInput.WriteLine("emit");
+            if (child.StandardOutput.ReadLine() != "sent")
+            {
+                throw new InvalidOperationException("The new process did not emit its native name event.");
+            }
+            elapsed.Restart();
+            while (events.Types.Count == 0 && elapsed.ElapsedMilliseconds < pollInterval)
+            {
+                Application.DoEvents();
+            }
+            if (!events.Types.SequenceEqual(new[] { 0x800C }) || changes <= beforeName || callbackThread != uiThread)
+            {
+                throw new InvalidOperationException("The new process toolbar name change must wake detection on the UI thread.");
+            }
+        }
+        finally
+        {
+            child.StandardInput.WriteLine("done");
+            child.WaitForExit();
+        }
+    }
+
+    private static void NativeHookDeliversOnlySubscribedWindowChanges()
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type watcherType = assembly.GetType("Shuush.TeamsWindowWatcher", throwOnError: true)!;
+        Type configType = assembly.GetType("Shuush.AppConfig", throwOnError: true)!;
+        int pollInterval = (int)configType.GetProperty("PollIntervalMs")!.GetValue(Activator.CreateInstance(configType))!;
+        using Form window = new() { ShowInTaskbar = false };
+        using var events = new WindowEventListener { Window = window.Handle.ToInt64() };
+        Action onChanged = () => { };
+        Func<int, bool> ownsWindow = processId => processId == Environment.ProcessId;
+        using IDisposable watcher = (IDisposable)Activator.CreateInstance(watcherType, onChanged, ownsWindow)!;
+        using var unrelated = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!)
+        {
+            ArgumentList = { "--emit-window-name" },
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+        })!;
+        try
+        {
+            events.OtherWindow = long.Parse(unrelated.StandardOutput.ReadLine()!);
+            if (unrelated.StandardOutput.ReadLine() != "sent")
+            {
+                throw new InvalidOperationException("The unrelated process did not emit its native name event.");
+            }
+
+            // The unrelated process queues its name event first. Child 42 tags
+            // both fixtures, so the final name event is the delivery barrier.
+            foreach (uint eventType in new uint[] { 0x800B, 0x8005, 0x8006, 0x800A, 0x800C })
+            {
+                NotifyWinEvent(eventType, window.Handle, -4, 42);
+            }
+
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            while (!events.Types.Contains(0x800C) && elapsed.ElapsedMilliseconds < pollInterval)
+            {
+                Application.DoEvents();
+            }
+
+            if (events.Types.Count != 1 || events.Types[0] != 0x800C)
+            {
+                throw new InvalidOperationException(
+                    $"Expected exactly one native callback for the toolbar name change, got {events.Types.Count}: " +
+                    string.Join(", ", events.Types.Select(value => value.ToString("X4"))));
+            }
+        }
+        finally
+        {
+            unrelated.StandardInput.WriteLine("done");
+            unrelated.WaitForExit();
+        }
+    }
+
+    private sealed class WindowEventListener : EventListener
+    {
+        public long Window { get; init; }
+        public long OtherWindow { get; set; }
+        public List<int> Types { get; } = new();
+
+        protected override void OnEventSourceCreated(EventSource eventSource)
+        {
+            if (eventSource.Name == "Shuush-Detection")
+            {
+                this.EnableEvents(eventSource, EventLevel.Verbose);
+            }
+        }
+
+        protected override void OnEventWritten(EventWrittenEventArgs eventData)
+        {
+            if (eventData.EventId == 1 && eventData.Payload is { Count: 4 } payload
+                && ((long)payload[1]! == this.Window || (long)payload[1]! == this.OtherWindow)
+                && (int)payload[3]! == 42)
+            {
+                this.Types.Add((int)payload[0]!);
+            }
+        }
+    }
+
+    private static void WindowChangesWakeDetectionOnTheUiThread()
+    {
+        Assembly assembly = Assembly.Load("shuush");
+        Type watcherType = assembly.GetType("Shuush.TeamsWindowWatcher", throwOnError: true)!;
+        Type configType = assembly.GetType("Shuush.AppConfig", throwOnError: true)!;
+        object config = Activator.CreateInstance(configType)!;
+        int pollInterval = (int)configType.GetProperty("PollIntervalMs")!.GetValue(config)!;
+        int uiThread = Environment.CurrentManagedThreadId;
+        int callbackThread = 0;
+        int changes = 0;
+        Action onChanged = () =>
+        {
+            callbackThread = Environment.CurrentManagedThreadId;
+            changes++;
+        };
+        Func<int, bool> ownsWindow = processId => processId == Environment.ProcessId;
+        using IDisposable watcher = (IDisposable)Activator.CreateInstance(watcherType, onChanged, ownsWindow)!;
+        using Form window = new() { Text = "Meeting window fixture", ShowInTaskbar = false };
+        window.Show();
+        WaitForChange(0);
+        int afterShow = changes;
+        window.Text = "Meeting toolbar ready";
+        WaitForChange(afterShow);
+        int afterRename = changes;
+        // EVENT_OBJECT_NAMECHANGE on OBJID_CLIENT represents a late toolbar update.
+        NotifyWinEvent(0x800C, window.Handle, -4, 1);
+        WaitForChange(afterRename);
+
+        void WaitForChange(int previous)
+        {
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            while (changes == previous && elapsed.ElapsedMilliseconds < pollInterval)
+            {
+                Application.DoEvents();
+            }
+
+            if (changes <= previous || callbackThread != uiThread)
+            {
+                throw new InvalidOperationException(
+                    $"Expected a window change on UI thread {uiThread} within one poll interval, " +
+                    $"but changes={changes}, previous={previous}, callbackThread={callbackThread}.");
+            }
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern void NotifyWinEvent(uint eventType, IntPtr window, int objectId, int childId);
 
     private static void ActiveCallHoldsLiveAcrossTransientMissedPoll()
     {

@@ -1,14 +1,64 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace Shuush;
 
 /// <summary>
 /// Win32 entry points used for tray-icon resource management and registry-change
-/// notifications.
+/// notifications and Teams window events.
 /// </summary>
 internal static class NativeMethods
 {
+    internal const uint ProcessQueryLimitedInformation = 0x1000;
+    internal const int ErrorInsufficientBuffer = 122;
+    internal const int ShellWindowCreated = 1;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern uint RegisterWindowMessage(string message);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RegisterShellHookWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeregisterShellHookWindow(IntPtr window);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern SafeProcessHandle OpenProcess(
+        uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool QueryFullProcessImageName(
+        SafeProcessHandle process, uint flags, StringBuilder imageName, ref int size);
+
+    internal enum WinEvent : uint
+    {
+        Foreground = 0x0003,
+        ObjectShow = 0x8002,
+        ObjectHide = 0x8003,
+        ObjectReorder = 0x8004,
+        ObjectNameChange = 0x800C,
+    }
+
+    internal delegate void WinEventCallback(
+        IntPtr hook, WinEvent eventType, IntPtr window, int objectId, int childId,
+        uint threadId, uint eventTime);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr SetWinEventHook(
+        WinEvent eventMin, WinEvent eventMax, IntPtr module, WinEventCallback callback,
+        uint processId, uint threadId, uint flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWinEvent(IntPtr hook);
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
     /// <summary>
     /// Releases the icon handle produced by <see cref="System.Drawing.Bitmap.GetHicon"/>.
     /// Each GetHicon call allocates a user object; without DestroyIcon the app leaks

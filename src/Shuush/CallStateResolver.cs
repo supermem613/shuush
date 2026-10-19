@@ -1,8 +1,8 @@
 namespace Shuush;
 
 /// <summary>
-/// Decides the mute state to apply from a single poll, given that the cheap
-/// microphone-activity registry gate already knows whether Teams is in a call.
+/// Decides the mute state to apply from a single poll and a positive
+/// microphone-activity hint.
 ///
 /// UI Automation is the source of truth for live vs muted, but it reads from a
 /// WebView2 tree that periodically replaces its accessibility nodes. During a
